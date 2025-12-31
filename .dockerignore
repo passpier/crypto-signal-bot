@@ -1,0 +1,43 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Data and logs (will be mounted as volumes)
+data/*.db
+logs/*.log
+n8n_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!README.md
+
+# Tests (not needed in production)
+tests/
+test_*.py
+
+# Development files
+.env
+.env.local
+docker-compose.yml
+

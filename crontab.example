@@ -1,0 +1,43 @@
+# Crypto Signal Bot - Cron Schedule Examples
+# Edit with: crontab -e
+
+# ============================================
+# RECOMMENDED: Hourly execution (at :00)
+# ============================================
+0 * * * * cd /path/to/crypto-signal-bot && python scripts/main.py >> logs/cron.log 2>&1
+
+# ============================================
+# ALTERNATIVE: Every 4 hours
+# ============================================
+# 0 */4 * * * cd /path/to/crypto-signal-bot && python scripts/main.py >> logs/cron.log 2>&1
+
+# ============================================
+# ALTERNATIVE: Specific times per day
+# ============================================
+# Run at 00:00, 06:00, 12:00, 18:00
+# 0 0,6,12,18 * * * cd /path/to/crypto-signal-bot && python scripts/main.py >> logs/cron.log 2>&1
+
+# ============================================
+# For Docker Compose deployment
+# ============================================
+# 0 * * * * cd /path/to/crypto-signal-bot && docker-compose -f docker-compose.prod.yml run --rm crypto-bot python scripts/main.py >> logs/cron.log 2>&1
+
+# ============================================
+# Cron Format Reference
+# ============================================
+# ┌───────────── minute (0 - 59)
+# │ ┌───────────── hour (0 - 23)
+# │ │ ┌───────────── day of month (1 - 31)
+# │ │ │ ┌───────────── month (1 - 12)
+# │ │ │ │ ┌───────────── day of week (0 - 6) (Sunday=0)
+# │ │ │ │ │
+# * * * * * command to execute
+
+# Examples:
+# 0 * * * *     - Every hour at :00
+# */15 * * * *  - Every 15 minutes
+# 0 */4 * * *   - Every 4 hours
+# 0 9 * * *     - Every day at 9 AM
+# 0 9,21 * * *  - Every day at 9 AM and 9 PM
+# 0 9 * * 1-5   - Weekdays at 9 AM
+

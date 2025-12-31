@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  crypto-bot:
+    build: .
+    container_name: crypto-signal-bot
+    restart: always
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    environment:
+      - TZ=Asia/Taipei
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Cron runs inside container - executes bot every hour
+    command: >
+      sh -c "echo '0 * * * * cd /app && python scripts/main.py >> /app/logs/cron.log 2>&1' | crontab - &&
+             cron &&
+             echo 'Crypto Signal Bot started with hourly cron' &&
+             tail -f /dev/null"
+
+  # Optional: n8n for advanced workflow management
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - TZ=Asia/Taipei
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Uncomment below to disable n8n
+    # profiles: ["disabled"]
+
