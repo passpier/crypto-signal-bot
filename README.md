@@ -192,6 +192,11 @@ crypto-signal-bot/
 │   ├── backtest.py              # 📈 30-day performance testing
 │   └── utils.py                 # 🛠️ Config & logging
 ├── config/config.yaml           # ⚙️ Settings & API keys
+├── azure_function/              # ☁️ Azure Functions deployment
+│   ├── __init__.py              # Timer trigger function
+│   ├── function_app.py         # Function app configuration
+│   ├── requirements.txt        # Azure Functions dependencies
+│   └── host.json               # Host settings
 ├── Dockerfile                   # 🐳 Production container
 ├── docker-compose.prod.yml      # 🚀 Production deployment
 ├── docker-compose.yml           # 🧪 Development (n8n)
@@ -211,9 +216,3 @@ This bot is for educational and research purposes. Cryptocurrency trading involv
 - Test thoroughly before real trading
 - Understand technical analysis limitations
 - Never trade with money you can't afford to lose
-
-## 📚 Additional Documentation
-
-- **[setup_gemini.md](setup_gemini.md)** - Step-by-step Gemini API setup
-- **[tests/README.md](tests/README.md)** - Test suite documentation
-- **[deployment_oracle_cloud.md](deployment_oracle_cloud.md)** - Cloud deployment guide

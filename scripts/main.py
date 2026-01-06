@@ -3,6 +3,7 @@ import json
 import sys
 import logging
 import asyncio
+import os
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -14,15 +15,31 @@ from scripts.telegram_bot import TelegramNotifier
 from scripts.sentiment_analyzer import SentimentAnalyzer
 from scripts.utils import get_project_root, validate_config, load_config
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/bot.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Detect if running in Azure Functions
+IS_AZURE_FUNCTIONS = os.getenv('FUNCTIONS_WORKER_RUNTIME') is not None or \
+                     os.getenv('WEBSITE_INSTANCE_ID') is not None
+
+# Setup logging - adapt for Azure Functions
+if IS_AZURE_FUNCTIONS:
+    # Azure Functions: Use only StreamHandler (logs go to Application Insights)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+else:
+    # Local/Docker: Use file and stream handlers
+    log_dir = get_project_root() / 'logs'
+    log_dir.mkdir(exist_ok=True)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / 'bot.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +219,9 @@ def main():
 
 
 if __name__ == "__main__":
-    # Ensure logs directory exists
-    log_dir = get_project_root() / 'logs'
-    log_dir.mkdir(exist_ok=True)
+    # Ensure logs directory exists (only for local execution)
+    if not IS_AZURE_FUNCTIONS:
+        log_dir = get_project_root() / 'logs'
+        log_dir.mkdir(exist_ok=True)
     
     sys.exit(main())
