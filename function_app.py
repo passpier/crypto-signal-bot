@@ -1,11 +1,6 @@
 """Azure Functions App Host Configuration."""
 import azure.functions as func
 import logging
-import sys
-from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 app = func.FunctionApp()
 
@@ -33,6 +28,7 @@ def crypto_signal_timer(myTimer: func.TimerRequest) -> None:
     
     try:
         # Import and run the bot main function
+        # With flat structure, scripts/ is in the same directory
         from scripts.main import main as bot_main
         
         # Run the bot main function

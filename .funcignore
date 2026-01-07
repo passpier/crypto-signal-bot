@@ -35,7 +35,7 @@ htmlcov/
 .git/
 .gitignore
 
-# Documentation
+# Documentation (keep README.md)
 *.md
 !README.md
 
@@ -46,6 +46,11 @@ docker-compose*.yml
 
 # Config (use App Settings instead)
 config/config.yaml
+
+# Deployment docs
+azure_function/
+deployment_*.md
+setup*.md
 
 # OS
 .DS_Store

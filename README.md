@@ -111,7 +111,7 @@ AI風險管理建議:
 ## 📋 Prerequisites
 
 ### Required
-- Python 3.10+ (Anaconda recommended)
+- Python 3.11+ (Anaconda recommended)
 - **Telegram Bot Token** - Get from [@BotFather](https://t.me/BotFather)
 - **Telegram Chat ID** - Get from [@userinfobot](https://t.me/userinfobot)
 - **Google Gemini API Key** - Free tier (1,500/day) from [AI Studio](https://aistudio.google.com/apikey)
@@ -119,7 +119,7 @@ AI風險管理建議:
 
 ## 💻 Usage
 
-### Setup (First Time)
+### Setup
 
 **1. Install Dependencies**
 ```bash
@@ -127,44 +127,22 @@ cd crypto-signal-bot
 pip install -r requirements.txt
 ```
 
-**2. Configure API Keys**
-Edit `config/config.yaml`:
-```yaml
-api_keys:
-  telegram_token: "YOUR_TELEGRAM_BOT_TOKEN"      # From @BotFather
-  telegram_chat_id: "YOUR_CHAT_ID"               # From @userinfobot
-  gemini_api_key: "YOUR_GEMINI_KEY"              # Optional, from AI Studio
-```
-
-**Get Telegram Credentials:**
-- Open Telegram → Search **@BotFather** → `/newbot` → Follow instructions
-- Search **@userinfobot** → Send any message → Copy your ID
-
-**Get Gemini API Key (Optional):**
-- Visit https://aistudio.google.com/apikey → Click "Create API Key"
-
-**3. Test the Bot**
+**2. Test Locally**
 ```bash
 python tests/test_quick.py           # Quick manual test
 python -m unittest discover tests  # Full test suite
 python scripts/main.py               # Run live bot
 ```
 
-### Manual Execution
-```bash
-# Run full bot (fetch data, generate signal, send to Telegram)
-python scripts/main.py
-
-# Test individual components
-python scripts/data_fetcher.py      # Test Binance API
-python scripts/backtest.py          # 30-day performance
-tail -f logs/bot.log                # Monitor logs
-```
-
 ## ⚙️ Configuration
 
 ### Trading Parameters (`config/config.yaml`)
 ```yaml
+api_keys:
+  telegram_token: "YOUR_TELEGRAM_BOT_TOKEN"      # From @BotFather
+  telegram_chat_id: "YOUR_CHAT_ID"               # From @userinfobot
+  gemini_api_key: "YOUR_GEMINI_KEY"              # Optional, from AI Studio
+
 trading:
   symbol: "BTCUSDT"          # Trading pair
   stop_loss_percent: 3       # Default stop loss (%)
@@ -192,11 +170,10 @@ crypto-signal-bot/
 │   ├── backtest.py              # 📈 30-day performance testing
 │   └── utils.py                 # 🛠️ Config & logging
 ├── config/config.yaml           # ⚙️ Settings & API keys
-├── azure_function/              # ☁️ Azure Functions deployment
-│   ├── __init__.py              # Timer trigger function
-│   ├── function_app.py         # Function app configuration
-│   ├── requirements.txt        # Azure Functions dependencies
-│   └── host.json               # Host settings
+│── __init__.py                  # Timer trigger function
+│── function_app.py              # Function app configuration
+│── host.json                    # Host settings
+├── .funcignore                  # Deployment exclusions
 ├── Dockerfile                   # 🐳 Production container
 ├── docker-compose.prod.yml      # 🚀 Production deployment
 ├── docker-compose.yml           # 🧪 Development (n8n)

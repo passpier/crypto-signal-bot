@@ -9,15 +9,31 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/bot.log'),
-        logging.StreamHandler()
-    ]
-)
+# Detect if running in Azure Functions
+IS_AZURE_FUNCTIONS = os.getenv('FUNCTIONS_WORKER_RUNTIME') is not None or \
+                     os.getenv('WEBSITE_INSTANCE_ID') is not None
+
+# Setup logging - adapt for Azure Functions
+if IS_AZURE_FUNCTIONS:
+    # Azure Functions: Use only StreamHandler (logs go to Application Insights)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+else:
+    # Local/Docker: Use file and stream handlers
+    log_dir = Path(__file__).parent.parent / 'logs'
+    log_dir.mkdir(exist_ok=True)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / 'bot.log'),
+            logging.StreamHandler()
+        ]
+    )
 
 logger = logging.getLogger(__name__)
 
