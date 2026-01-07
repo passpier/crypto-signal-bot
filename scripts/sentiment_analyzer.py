@@ -42,13 +42,15 @@ class SentimentAnalyzer:
                 if gemini_key and gemini_key != "YOUR_GEMINI_API_KEY":
                     genai.configure(api_key=gemini_key)
                     self.model = genai.GenerativeModel(
-                        model_name="gemini-2.5-flash",  # Latest stable, separate quota
+                        model_name="gemini-2.5-flash-lite",
                         generation_config={
                             "temperature": 0.3,
-                            "max_output_tokens": 1000,  # Increased for detailed trading plans
+                            "max_output_tokens": 1024,
+                            "top_p": 0.95,
+                            "top_k": 40, 
                         }
                     )
-                    logger.info("Sentiment analyzer initialized with Gemini 2.5 Flash")
+                    logger.info("Sentiment analyzer initialized with Gemini 2.5 Flash Lite")
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini: {e}")
     
@@ -211,39 +213,22 @@ class SentimentAnalyzer:
             fear_greed_value = fear_greed.get('value', 50)
             fear_greed_class = fear_greed.get('classification', 'Neutral')
             
-            # Add contrarian context to prompt
-            contrarian_note = ""
-            if fear_greed_value <= 25 and tech_action == 'HOLD':
-                contrarian_note = "\n重要：極度恐懼(≤25)配合中性技術面，可能是 contrarian 買入機會。"
-            elif fear_greed_value >= 75 and tech_action == 'HOLD':
-                contrarian_note = "\n重要：極度貪婪(≥75)配合中性技術面，可能是 contrarian 賣出機會。"
-            
             # Simplified prompt to avoid truncation - use concise format that works
             prompt = f"""BTC市場數據：恐懼指數{fear_greed_value}({fear_greed_class})，RSI={tech_rsi}，技術訊號{tech_action}(強度{tech_strength}/5)，24h變化{tech_price_change:+.1f}%。
-{contrarian_note}
 
-請用繁體中文給出100字內的交易分析，包含：
-1. 交易建議（買入/賣出/觀望）
-2. 關鍵因素（2個）
-3. 倉位建議（分幾批進場，每批多少%）
-4. 主要風險（一句話）
-
-純文字輸出，不要markdown符號，不要免責聲明。"""
+100字內給出：交易建議(買入/賣出/觀望)、2個關鍵因素、倉位策略(分幾批進場，每批多少%)、風險提示。純文字，無格式。"""
             
             # Use google-generativeai directly
             response = self.model.generate_content(prompt)
+
+            if hasattr(response, 'usage_metadata'):
+                logger.info(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
+                logger.info(f"Candidates tokens: {response.usage_metadata.candidates_token_count}")
+                logger.info(f"Total tokens: {response.usage_metadata.total_token_count}")
             
-            # Check if response was truncated
-            finish_reason = response.candidates[0].finish_reason if response.candidates else None
-            if finish_reason == 2:  # MAX_TOKENS - response was truncated
-                logger.warning(f"Gemini response truncated (finish_reason: {finish_reason}). Response may be incomplete.")
-                # Try to get partial response
-                if response.candidates and response.candidates[0].content:
-                    ai_text = response.candidates[0].content.parts[0].text if response.candidates[0].content.parts else response.text
-                else:
-                    ai_text = response.text
-            else:
-                ai_text = response.text
+            logger.info(f"Google gemini response: {response.text}")
+            logger.info(f"Google finish reason: {response.candidates[0].finish_reason}")
+            ai_text = response.text
             
             # Clean any markdown that might slip through
             import re

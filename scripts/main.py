@@ -121,7 +121,7 @@ def main():
         logger.info("[5/6] Evaluating signal strength for notification...")
         
         # Decide whether to send notification
-        should_notify = False
+        should_notify = True
         notification_reason = ""
         
         if signal['action'] != 'HOLD':
