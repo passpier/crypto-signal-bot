@@ -1,6 +1,7 @@
 """Telegram notification module for sending trading signals."""
 import asyncio
 import logging
+import json
 from typing import Dict, Optional
 from pathlib import Path
 import sys
@@ -48,11 +49,34 @@ class TelegramNotifier:
         self.chat_id = str(telegram_chat_id)
         logger.info("Telegram notifier initialized")
     
+    def _parse_ai_advice_json(self, ai_advice_text: str) -> Optional[Dict]:
+        """
+        Parse AI advice JSON string.
+        
+        Args:
+            ai_advice_text: JSON string from AI analysis
+            
+        Returns:
+            Parsed dictionary or None if parsing fails
+        """
+        if not ai_advice_text or not ai_advice_text.strip():
+            return None
+        
+        try:
+            # Try to parse JSON
+            parsed = json.loads(ai_advice_text)
+            return parsed
+        except json.JSONDecodeError:
+            # If not JSON, return None
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to parse AI advice JSON: {e}")
+            return None
+    
     async def send_signal(
         self, 
         signal: Dict, 
         sentiment: Optional[Dict] = None,
-        backtest_stats: Optional[Dict] = None
     ) -> bool:
         """
         Send simplified trading signal to Telegram.
@@ -60,100 +84,136 @@ class TelegramNotifier:
         Args:
             signal: Signal dictionary with action, price, indicators, etc.
             sentiment: Sentiment analysis results from sentiment_analyzer
-            backtest_stats: Optional backtest statistics (win_rate, etc.)
             
         Returns:
             True if message sent successfully, False otherwise
         """
         try:
+            # Get AI advice from sentiment
+            ai_advice_text = sentiment.get('ai_advice_text', '') if sentiment else ''
+            
+            # Try to parse JSON
+            ai_data = self._parse_ai_advice_json(ai_advice_text)
+            
+            # Get data from signal and sentiment
+            current_price = signal.get('price', 0)
+            rsi = signal['indicators'].get('rsi') if signal.get('indicators') else None
+            macd = signal['indicators'].get('macd') if signal.get('indicators') else None
+            volume_change = signal['indicators'].get('volume_change', 0) if signal.get('indicators') else 0
+            fear_greed_value = sentiment.get('fear_greed_value') if sentiment else None
+            fear_greed_class = sentiment.get('fear_greed_class', 'Neutral') if sentiment else 'Neutral'
+            
             # Map action to Chinese
             action_map = {
                 'BUY': '買入',
                 'SELL': '賣出',
-                'HOLD': '觀望',
-                'STRONG_BUY': '強力買入',
-                'STRONG_SELL': '強力賣出'
+                'HOLD': '觀望'
             }
             
-            # Get combined recommendation
-            combined = self._get_combined_recommendation(signal, sentiment)
-            action_text = action_map.get(combined['action'], '觀望')
+            # Use AI data if available, otherwise fallback to signal
+            if ai_data:
+                signal_action = ai_data.get('signal', signal.get('action', 'HOLD'))
+                signal_strength = ai_data.get('strength', signal.get('strength', 3))
+                entry_range = ai_data.get('entry_range', {})
+                target_price = ai_data.get('target_price', [])
+                stop_loss = ai_data.get('stop_loss_price', {})
+                risk_reward = ai_data.get('risk_reward_ratio', 0)
+                risk_management = ai_data.get('risk_management', '')
+                main_risk = ai_data.get('main_risk', '')
+                key_factors = ai_data.get('key_factors', [])
+            else:
+                # Fallback to signal data or empty
+                signal_action = signal.get('action', 'HOLD')
+                signal_strength = signal.get('strength', 3)
+                entry_range = {}
+                target_price = []
+                stop_loss = {}
+                risk_reward = 0
+                risk_management = ''
+                main_risk = ''
+                key_factors = []
             
-            # Get price info
-            price = signal['price']
-            price_change_24h = signal['indicators'].get('price_change_24h', 0)
-            take_profit_pct = ((signal['take_profit'] / price) - 1) * 100
-            stop_loss_pct = ((signal['stop_loss'] / price) - 1) * 100
+            action_text = action_map.get(signal_action, '觀望')
             
-            # Get indicators
-            rsi = signal['indicators'].get('rsi')
-            volume_change = signal['indicators'].get('volume_change', 0)
+            # Build message
+            message = f"🔔 BTC {action_text}訊號 ({signal_strength}/5)\n\n"
             
-            # Get sentiment info
-            fear_greed = sentiment.get('fear_greed_value', 50) if sentiment else None
-            fear_greed_class = sentiment.get('sentiment_class', '') if sentiment else ''
+            # Entry range
+            if entry_range:
+                entry_low = entry_range.get('low', 0)
+                entry_high = entry_range.get('high', 0)
+                if entry_low and entry_high:
+                    message += f"入場: ${entry_low:,.0f}-${entry_high:,.0f}\n"
             
-            # Build signal reasons
-            reasons = []
+            # Current price
+            if current_price > 0:
+                message += f"現價: ${current_price:,.0f}\n"
             
-            # RSI reason
+            message += "━━━━━━━━━━━━━━━━\n"
+            
+            # Target price
+            if target_price and len(target_price) > 0:
+                # Use first target price
+                first_target = target_price[0]
+                target_price_value = first_target.get('price', 0)
+                if target_price_value > 0 and current_price > 0:
+                    target_pct = ((target_price_value / current_price) - 1) * 100
+                    message += f"目標: ${target_price_value:,.0f} (+{target_pct:.1f}%)\n"
+            
+            # Stop loss
+            if stop_loss:
+                stop_loss_price_value = stop_loss.get('price', 0)
+                stop_loss_pct = stop_loss.get('percentage', 0)
+                if stop_loss_price_value > 0:
+                    message += f"停損: ${stop_loss_price_value:,.0f}"
+                    if stop_loss_pct > 0:
+                        message += f" (-{stop_loss_pct:.1f}%)"
+                    message += "\n"
+            
+            # Risk-reward ratio
+            if risk_reward > 0:
+                message += f"風報比: 1:{risk_reward:.1f}\n"
+            
+            message += "━━━━━━━━━━━━━━━━\n"
+            
+            # Indicators
+            indicator_parts = []
             if rsi is not None:
-                if rsi < 30:
-                    reasons.append(f"RSI {rsi:.0f} 超賣反彈")
-                elif rsi > 70:
-                    reasons.append(f"RSI {rsi:.0f} 超買回調")
-                else:
-                    reasons.append(f"RSI {rsi:.0f}")
+                indicator_parts.append(f"RSI {rsi:.0f}")
             
-            # Fear & Greed reason
-            if fear_greed is not None:
-                if fear_greed <= 25:
-                    reasons.append(f"恐懼指數 {fear_greed} 極度恐懼")
-                elif fear_greed <= 40:
-                    reasons.append(f"恐懼指數 {fear_greed} 恐懼")
-                elif fear_greed >= 75:
-                    reasons.append(f"恐懼指數 {fear_greed} 極度貪婪")
-                elif fear_greed >= 60:
-                    reasons.append(f"恐懼指數 {fear_greed} 貪婪")
-                else:
-                    reasons.append(f"恐懼指數 {fear_greed} 中性")
+            if macd is not None:
+                macd_text = "多頭" if macd > 0 else "空頭"
+                indicator_parts.append(f"MACD {macd_text}")
             
-            # Volume reason
+            if indicator_parts:
+                message += " | ".join(indicator_parts) + "\n"
+            
+            # Fear & Greed
+            if fear_greed_value is not None:
+                message += f"恐懼指數: {fear_greed_value}/100 ({fear_greed_class})\n"
+            
+            # Volume change
             if volume_change != 0:
-                reasons.append(f"成交量 {volume_change:+.0f}%")
+                message += f"成交量 {volume_change:+.0f}%\n"
             
-            # Get AI advice from sentiment (Gemini output or template fallback)
-            ai_generated = sentiment.get('ai_generated', False) if sentiment else False
-            ai_advice_text = sentiment.get('ai_advice_text', '') if sentiment else ''
+            # Risk management
+            if risk_management:
+                message += f"\n💡風險管理建議: {risk_management}\n"
             
-            # If no AI advice available, use rule-based fallback
-            if not ai_advice_text:
-                ai_advice_text = self._generate_ai_advice(combined['action'], signal['strength'], fear_greed)
-                ai_generated = False
+            # Main risk
+            if main_risk:
+                message += f"⚠️主要風險: {main_risk}\n"
             
-            # Title changes based on whether Gemini was used
-            advice_title = "AI風險管理建議" if ai_generated else "風險管理建議"
+            # Key factors
+            if key_factors:
+                message += "關鍵因素:\n"
+                # Show first 3 key factors
+                for factor in key_factors[:3]:
+                    message += f"   • {factor}\n"
             
-            # Build simplified message
-            message = f"""🔔 BTC {action_text}訊號 ({signal['strength']}/5)
-
-入場: ${signal['entry_range'][0]:,.0f}-${signal['entry_range'][1]:,.0f}
-現價: ${price:,.0f} ({price_change_24h:+.2f}%)
-━━━━━━━━━━━━━━━━
-目標: ${signal['take_profit']:,.0f} (+{take_profit_pct:.1f}%)
-停損: ${signal['stop_loss']:,.0f} ({stop_loss_pct:.1f}%)
-風報比: 1:{signal['risk_reward']:.1f}
-━━━━━━━━━━━━━━━━
-訊號依據:
-"""
-            # Add reasons
-            for reason in reasons:
-                message += f"• {reason}\n"
-            
-            # Add AI/Template advice with appropriate title
-            message += f"""
-{advice_title}:
-{ai_advice_text}"""
+            # If no AI data, show raw text
+            if not ai_data and ai_advice_text:
+                message += f"\n🤖AI分析結果:\n\n{ai_advice_text}"
             
             # Add interactive button
             keyboard = [
@@ -170,7 +230,7 @@ class TelegramNotifier:
                 reply_markup=reply_markup
             )
             
-            logger.info(f"Sent signal to Telegram: {action_text} ({signal['strength']}/5)")
+            logger.info(f"Sent signal to Telegram: {action_text} ({signal_strength}/5)")
             return True
             
         except TelegramError as e:
@@ -179,91 +239,6 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}", exc_info=True)
             return False
-    
-    def _generate_ai_advice(self, action: str, strength: int, fear_greed: Optional[int]) -> str:
-        """
-        Generate AI risk management advice with conditional language.
-        
-        Args:
-            action: Combined action (BUY/SELL/HOLD/STRONG_BUY/STRONG_SELL)
-            strength: Signal strength (1-5)
-            fear_greed: Fear & Greed index value
-            
-        Returns:
-            Risk management advice string
-        """
-        if action == 'STRONG_BUY':
-            if strength >= 4:
-                return "若決定進場，建議分 2-3 批，首批不超過 40% 倉位，並嚴設停損"
-            else:
-                return "若考慮進場，可分批建倉，首批建議 30% 倉位，觀察後續走勢"
-        elif action == 'BUY':
-            if fear_greed and fear_greed < 40:
-                return "市場情緒偏低，若進場可分 2 批，首批 30%，注意控制風險"
-            else:
-                return "若嘗試進場，建議輕倉 20-30%，設好停損再行動"
-        elif action == 'STRONG_SELL':
-            return "若持有部位，可考慮減倉 50-70%，保留部分觀察後續"
-        elif action == 'SELL':
-            if fear_greed and fear_greed > 60:
-                return "市場情緒偏高，若有獲利可考慮減倉 30-50%，落袋為安"
-            else:
-                return "若持有部位，可考慮適度減倉 20-30%，等待更好時機"
-        else:  # HOLD
-            return "目前訊號不明確，建議暫時觀望，等待更清晰的進場點"
-    
-    def _get_combined_recommendation(self, signal: Dict, sentiment: Optional[Dict]) -> Dict:
-        """
-        Combine technical signal with sentiment analysis for final recommendation.
-        
-        Combined Strategy Logic:
-        - Technical and Sentiment agree: HIGH confidence
-        - Technical strong, Sentiment neutral: MEDIUM confidence  
-        - Technical and Sentiment disagree: LOW confidence, prefer HOLD
-        """
-        tech_action = signal['action']
-        tech_strength = signal['strength']
-        
-        # Default if no sentiment
-        if not sentiment:
-            return {
-                'action': tech_action,
-                'confidence': min(tech_strength * 20, 100)
-            }
-        
-        fear_greed = sentiment.get('fear_greed_value', 50)
-        consistency = sentiment.get('consistency', '不明確')
-        
-        # Map sentiment to bullish/bearish
-        sentiment_bullish = fear_greed > 60  # Greed = bullish
-        sentiment_bearish = fear_greed < 40  # Fear = bearish (contrarian: good to buy)
-        
-        # Combined logic
-        if tech_action == 'BUY':
-            if sentiment_bearish:  # Extreme fear + Buy signal = Strong contrarian buy
-                return {'action': 'STRONG_BUY', 'confidence': min(90, tech_strength * 18 + 20)}
-            elif sentiment_bullish:  # Greed + Buy signal = Caution, may be top
-                return {'action': 'BUY', 'confidence': min(70, tech_strength * 14)}
-            else:  # Neutral sentiment
-                return {'action': 'BUY', 'confidence': min(80, tech_strength * 16)}
-        
-        elif tech_action == 'SELL':
-            if sentiment_bullish:  # Extreme greed + Sell signal = Strong contrarian sell
-                return {'action': 'STRONG_SELL', 'confidence': min(90, tech_strength * 18 + 20)}
-            elif sentiment_bearish:  # Fear + Sell signal = Caution, may be bottom
-                return {'action': 'SELL', 'confidence': min(70, tech_strength * 14)}
-            else:  # Neutral sentiment
-                return {'action': 'SELL', 'confidence': min(80, tech_strength * 16)}
-        
-        else:  # HOLD
-            # Check if sentiment gives us a directional hint
-            if consistency == '一致看多':
-                return {'action': 'BUY', 'confidence': 50}
-            elif consistency == '一致看空':
-                return {'action': 'SELL', 'confidence': 50}
-            else:
-                return {'action': 'HOLD', 'confidence': 40}
-    
     
     async def send_backtest_results(self, results: Dict) -> bool:
         """

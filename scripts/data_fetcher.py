@@ -12,7 +12,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.utils import get_project_root
+from scripts.utils import get_project_root, IS_AZURE_FUNCTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +29,20 @@ class CryptoDataFetcher:
             symbol: Trading pair symbol (e.g., BTCUSDT)
         """
         if db_path is None:
-            db_path = get_project_root() / 'data' / 'btc_prices.db'
+            # Azure Functions: Use /tmp (writable), Local: Use project data dir
+            if IS_AZURE_FUNCTIONS:
+                db_path = Path('/tmp') / 'btc_prices.db'
+            else:
+                db_path = get_project_root() / 'data' / 'btc_prices.db'
         else:
             db_path = Path(db_path)
         
-        # Ensure data directory exists
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Ensure data directory exists (skip if Azure Functions /tmp)
+        try:
+            if not IS_AZURE_FUNCTIONS or str(db_path.parent) != '/tmp':
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"Could not create directory {db_path.parent}: {e}")
         
         self.db_path = str(db_path)
         self.symbol = symbol

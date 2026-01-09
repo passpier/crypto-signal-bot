@@ -54,51 +54,27 @@ An automated cryptocurrency trading signal bot that combines technical analysis 
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Signal Generation & Strategy
-
-**Technical Signal Calculation (Point-based system -5 to +5):**
-- RSI < 30 (oversold): +2 | RSI > 70 (overbought): -2
-- MACD golden cross: +2 | MACD death cross: -2
-- Price > MA50: +1 | Price < MA50: -1
-- Volume > 1.5x average: +1
-
-**Combined with Sentiment (Contrarian Logic):**
-| Technical | Sentiment | Result | Logic |
-|-----------|-----------|--------|-------|
-| BUY | Fear (<40) | 🔥 **STRONG_BUY** | "Buy when others are fearful" |
-| BUY | Greed (>60) | ⚠️ BUY (caution) | Potential top, reduce confidence |
-| SELL | Greed (>60) | 🔥 **STRONG_SELL** | "Sell when others are greedy" |
-| SELL | Fear (<40) | ⚠️ SELL (caution) | Potential bottom, reduce confidence |
-
-**Signal Strength Mapping:**
-- **4-5 ⭐ (80-100%)**: Strong signals → Telegram sent
-- **3 ⭐ (60%)**: Moderate signals → Telegram sent
-- **1-2 ⭐ (<60%)**: Weak/mixed signals → No Telegram sent
-
 ### Simplified Telegram Message Format
 
 ```
-🔔 BTC 強力買入訊號 (4/5)
+🔔 BTC 買入訊號 (3/5)
 
-入場: $89,500-$89,800
-現價: $90,316 (-2.42%)
+入場: $90,334-$90,334
+現價: $90,334
 ━━━━━━━━━━━━━━━━
-目標: $92,500 (+3.2%)
-停損: $87,800 (-2.1%)
+目標: $95,000 (+5.2%)
+停損: $88,000
 風報比: 1:1.5
 ━━━━━━━━━━━━━━━━
-訊號依據:
-• RSI 28 超賣反彈
-• 恐懼指數 29 極度恐懼
-• 成交量 +45%
+RSI 40 | MACD 空頭
+恐懼指數: 27/100 (Fear)
+成交量 -12%
 
-AI風險管理建議:
-1. 交易訊號: 分批建倉
-2. 訊號強度: 4/5
-3. 關鍵因素:
-   • RSI超賣區，恐懼指數偏低
-4. 風險管理建議: 分2-3批進場，首批40%倉位
-5. 主要風險: 若跌破支撐位需及時停損
+💡風險管理建議: 使用 10% 的倉位，並在價格回調時分批買入。
+⚠️主要風險: 若價格跌破 90,000 美元，可能引發進一步下跌。
+關鍵因素:
+   • RSI 40 顯示市場超賣，有反彈潛力。
+   • 恐懼與貪婪指數 27 處於恐懼區域，情緒上可能觸底。
 ```
 
 **Message includes:**
@@ -106,7 +82,7 @@ AI風險管理建議:
 - 🎯 Target and stop loss with percentages
 - ⚖️ Risk/reward ratio
 - 📈 Signal reasons (technical + sentiment)
-- 🤖 **AI風險管理建議** (Gemini output)
+- 🤖 Risk management
 
 ## 📋 Prerequisites
 

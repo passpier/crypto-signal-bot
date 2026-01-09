@@ -5,6 +5,7 @@ from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import pandas as pd
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -40,6 +41,42 @@ class SentimentAnalyzer:
             try:
                 gemini_key = self.config['api_keys'].get('gemini_api_key', '')
                 if gemini_key and gemini_key != "YOUR_GEMINI_API_KEY":
+                    response_schema = {
+                        "type": "object",
+                        "properties": {
+                            "signal": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
+                            "strength": {"type": "integer"},
+                            "entry_range": {"type": "object","properties": {
+                                "low": {"type": "number"},
+                                "high": {"type": "number"}
+                                }
+                            },
+                            "target_price": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "price": {"type": "number"},
+                                        "allocation": {"type": "number"}
+                                    }
+                                }
+                            },
+                            "stop_loss_price": {
+                                "type": "object",
+                                "properties": {
+                                    "price": {"type": "number"},
+                                    "percentage": {"type": "number"}
+                                }
+                            },
+                            "risk_reward_ratio": {"type": "number"},
+                            "key_factors": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+                            "risk_management": {"type": "string"},
+                            "main_risk": {"type": "string"}
+                        }
+                    }
                     genai.configure(api_key=gemini_key)
                     self.model = genai.GenerativeModel(
                         model_name="gemini-2.5-flash-lite",
@@ -48,6 +85,8 @@ class SentimentAnalyzer:
                             "max_output_tokens": 1024,
                             "top_p": 0.95,
                             "top_k": 40, 
+                            "response_mime_type": "application/json",
+                            "response_schema": response_schema
                         }
                     )
                     logger.info("Sentiment analyzer initialized with Gemini 2.5 Flash Lite")
@@ -138,45 +177,12 @@ class SentimentAnalyzer:
             logger.warning(f"Failed to fetch crypto news: {e}")
             return []
     
-    def fetch_market_data_summary(self) -> Dict:
-        """
-        Fetch additional market data from CoinGecko (free API).
-        
-        Returns:
-            Dictionary with market cap, dominance, and volume data
-        """
-        try:
-            # Global market data
-            url = "https://api.coingecko.com/api/v3/global"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()['data']
-            
-            result = {
-                'total_market_cap_usd': data['total_market_cap']['usd'],
-                'total_volume_24h': data['total_volume']['usd'],
-                'btc_dominance': data['market_cap_percentage']['btc'],
-                'market_cap_change_24h': data['market_cap_change_percentage_24h_usd'],
-                'active_cryptocurrencies': data['active_cryptocurrencies']
-            }
-            
-            logger.info(f"BTC Dominance: {result['btc_dominance']:.1f}%")
-            return result
-            
-        except Exception as e:
-            logger.warning(f"Failed to fetch market data: {e}")
-            return {
-                'btc_dominance': 0,
-                'market_cap_change_24h': 0,
-                'error': str(e)
-            }
-    
     def analyze_sentiment_with_ai(
         self,
         fear_greed: Dict,
         news: List[Dict],
-        market_data: Dict,
-        technical_signal: Dict
+        df_with_indicators: pd.DataFrame,
+        current_price: float
     ) -> Dict:
         """
         Use Gemini AI to synthesize all data into actionable sentiment analysis.
@@ -184,40 +190,74 @@ class SentimentAnalyzer:
         Args:
             fear_greed: Fear & Greed Index data
             news: List of news articles
-            market_data: Market overview data
-            technical_signal: Technical analysis results
+            df_with_indicators: DataFrame with calculated technical indicators
+            current_price: Current BTCUSDT price
             
         Returns:
             Dictionary with AI sentiment analysis
         """
-        if not self.model:
-            return self._generate_template_sentiment(fear_greed, technical_signal)
-        
-        try:
-            # Build simplified prompt for direct Telegram output
-            action_zh = {'BUY': '買入', 'SELL': '賣出', 'HOLD': '觀望'}.get(
-                technical_signal.get('action', 'HOLD'), '觀望'
-            )
-            rsi = technical_signal.get('indicators', {}).get('rsi', 50)
-            strength = technical_signal.get('strength', 3)
-            price_change = technical_signal.get('indicators', {}).get('price_change_24h', 0)
+        try: 
+            latest = df_with_indicators.iloc[-1]
             
-            # Safe access to nested dictionaries
-            btc_dominance = market_data.get('btc_dominance', 0)
-            tech_action = technical_signal.get('action', 'HOLD')
-            tech_strength = technical_signal.get('strength', 3)
-            indicators = technical_signal.get('indicators', {})
-            tech_rsi = indicators.get('rsi', 50)
-            tech_price_change = indicators.get('price_change_24h', 0)
+            # Extract indicators from DataFrame
+            tech_rsi = float(latest['rsi']) if pd.notna(latest.get('rsi')) else 50
+            tech_macd = float(latest['macd']) if pd.notna(latest.get('macd')) else 0
+            tech_ema12 = float(latest['ema_12']) if pd.notna(latest.get('ema_12')) else 0
+            tech_bb_upper = float(latest['bb_upper']) if pd.notna(latest.get('bb_upper')) else None
+            tech_bb_middle = float(latest['bb_middle']) if pd.notna(latest.get('bb_middle')) else None
+            tech_bb_lower = float(latest['bb_lower']) if pd.notna(latest.get('bb_lower')) else None
+            tech_obv = float(latest['obv']) if pd.notna(latest.get('obv')) else None
+            tech_volume_change = float(latest['volume_change']) if pd.notna(latest.get('volume_change')) else 0.0
+            
+            # Clamp volume change to reasonable range (-100% to +1000%)
+            if tech_volume_change < -100:
+                tech_volume_change = -100
+            elif tech_volume_change > 1000:
+                tech_volume_change = 1000
+            
+            # Calculate OBV trend (direction and magnitude over recent period)
+            obv_change_pct = None
+            if tech_obv is not None and len(df_with_indicators) >= 7:
+                # Compare current OBV with OBV from 7 periods ago for more stable trend
+                obv_7_periods_ago = float(df_with_indicators.iloc[-7]['obv']) if pd.notna(df_with_indicators.iloc[-7].get('obv')) else None
+                if obv_7_periods_ago is not None and abs(obv_7_periods_ago) > 0:
+                    # Calculate percentage change over 7 periods
+                    obv_change_pct = ((tech_obv - obv_7_periods_ago) / abs(obv_7_periods_ago)) * 100
+                    # Clamp to reasonable range (-50% to +50%)
+                    if obv_change_pct < -50:
+                        obv_change_pct = -50
+                    elif obv_change_pct > 50:
+                        obv_change_pct = 50
             
             fear_greed_value = fear_greed.get('value', 50)
             fear_greed_class = fear_greed.get('classification', 'Neutral')
             
-            # Simplified prompt to avoid truncation - use concise format that works
-            prompt = f"""BTC市場數據：恐懼指數{fear_greed_value}({fear_greed_class})，RSI={tech_rsi}，技術訊號{tech_action}(強度{tech_strength}/5)，24h變化{tech_price_change:+.1f}%。
-
-100字內給出：交易建議(買入/賣出/觀望)、2個關鍵因素、倉位策略(分幾批進場，每批多少%)、風險提示。純文字，無格式。"""
+            # EMA12 difference percentage
+            ema_diff_pct = 0.0
+            if tech_ema12 is not None and current_price > 0:
+                ema_diff_pct = ((current_price - tech_ema12) / tech_ema12) * 100
             
+            # Bollinger Bands position (0-1, where 0=lower, 0.5=middle, 1=upper)
+            bb_position = 0.5
+            if tech_bb_upper is not None and tech_bb_lower is not None and current_price > 0:
+                bb_range = tech_bb_upper - tech_bb_lower
+                if bb_range > 0:
+                    bb_position = (current_price - tech_bb_lower) / bb_range
+                    # Clamp to valid range [0, 1]
+                    bb_position = max(0.0, min(1.0, bb_position))
+            
+            # Format BB position as percentage (0-100%)
+            bb_position_pct = bb_position * 100
+            
+            # Format OBV and Volume for prompt
+            obv_str = f"{obv_change_pct:+.1f}%" if obv_change_pct is not None else "N/A"
+            vol_str = f"{tech_volume_change:+.1f}%"
+            
+            # Updated prompt with new format
+            prompt = f"""BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str}
+            Swing trade recommendation. strength：1–5，key_factors需1技術+1情緒理由，risk_management需倉位%與分批策略，main_risk需價格情境。中文輸出。
+            """
+            logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
             response = self.model.generate_content(prompt)
 
@@ -226,90 +266,40 @@ class SentimentAnalyzer:
                 logger.info(f"Candidates tokens: {response.usage_metadata.candidates_token_count}")
                 logger.info(f"Total tokens: {response.usage_metadata.total_token_count}")
             
-            logger.info(f"Google gemini response: {response.text}")
             logger.info(f"Google finish reason: {response.candidates[0].finish_reason}")
             ai_text = response.text
             
-            # Clean any markdown that might slip through
-            import re
-            # Remove markdown formatting more thoroughly
-            ai_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', ai_text)  # Bold
-            ai_text = re.sub(r'\*([^*]+)\*', r'\1', ai_text)  # Italic
-            ai_text = re.sub(r'`([^`]+)`', r'\1', ai_text)  # Code blocks
-            ai_text = re.sub(r'#{1,6}\s+', '', ai_text)  # Headers
-            ai_text = re.sub(r'^\s*[-*+]\s+', '', ai_text, flags=re.MULTILINE)  # List markers at start of line
-            ai_text = re.sub(r'\n{3,}', '\n\n', ai_text)  # Multiple newlines
-            ai_text = ai_text.strip()
+            # Return simple structure with AI advice text only
+            result = {
+                'ai_generated': True,
+                'ai_advice_text': ai_text,  # Store cleaned AI output for Telegram
+                'fear_greed_value': fear_greed_value,
+                'fear_greed_class': fear_greed_class
+            }
             
-            # Parse AI response and store cleaned output for Telegram
-            parsed = self._parse_ai_response(ai_text, fear_greed)
-            parsed['ai_generated'] = True  # Flag to indicate AI was used
-            parsed['ai_advice_text'] = ai_text  # Store cleaned AI output for Telegram
-            logger.info(f"AI Sentiment: {parsed['sentiment_class']} (Score: {parsed['sentiment_score']})")
+            logger.info(f"AI Sentiment analysis completed (Fear & Greed: {result['fear_greed_value']})")
             
-            return parsed
+            return result
             
         except Exception as e:
             logger.warning(f"AI sentiment analysis failed: {e}")
-            return self._generate_template_sentiment(fear_greed, technical_signal)
+            return self._generate_template_sentiment(fear_greed, df_with_indicators)
     
-    def _parse_ai_response(self, ai_text: str, fear_greed: Dict) -> Dict:
-        """Parse AI response into structured data."""
-        lines = ai_text.strip().split('\n')
-        
-        result = {
-            'sentiment_score': 5,
-            'sentiment_class': '中性',
-            'consistency': '不明確',
-            'recommendation': '持有觀望',
-            'risk_warning': '市場波動大，注意風險控制',
-            'key_observation': '關注市場動向',
-            'raw_analysis': ai_text,
-            'fear_greed_value': fear_greed['value'],
-            'fear_greed_class': fear_greed['classification']
-        }
-        
-        for line in lines:
-            line = line.strip()
-            if '市場情緒評分' in line or '情緒評分' in line:
-                try:
-                    # Extract number from line
-                    import re
-                    numbers = re.findall(r'\d+', line)
-                    if numbers:
-                        result['sentiment_score'] = min(int(numbers[0]), 10)
-                except:
-                    pass
-            elif '情緒分類' in line:
-                for cls in ['極度恐懼', '恐懼', '中性', '貪婪', '極度貪婪']:
-                    if cls in line:
-                        result['sentiment_class'] = cls
-                        break
-            elif '一致性' in line:
-                for cons in ['一致看多', '一致看空', '存在分歧', '不明確']:
-                    if cons in line:
-                        result['consistency'] = cons
-                        break
-            elif '綜合建議' in line:
-                for rec in ['積極買入', '分批建倉', '持有觀望', '逢高減倉', '立即止損']:
-                    if rec in line:
-                        result['recommendation'] = rec
-                        break
-            elif '風險提示' in line:
-                parts = line.split(':', 1)
-                if len(parts) > 1:
-                    result['risk_warning'] = parts[1].strip()[:100]
-            elif '關鍵觀察' in line:
-                parts = line.split(':', 1)
-                if len(parts) > 1:
-                    result['key_observation'] = parts[1].strip()[:50]
-        
-        return result
     
-    def _generate_template_sentiment(self, fear_greed: Dict, technical_signal: Dict) -> Dict:
+    def _generate_template_sentiment(self, fear_greed: Dict, df_with_indicators: pd.DataFrame) -> Dict:
         """Generate template-based sentiment when AI is unavailable."""
         fg_value = fear_greed.get('value', 50)
-        tech_action = technical_signal.get('action', 'HOLD')
+        
+        # Determine action from RSI (simple fallback)
+        tech_action = 'HOLD'
+        if len(df_with_indicators) > 0:
+            latest = df_with_indicators.iloc[-1]
+            rsi = latest.get('rsi') if pd.notna(latest.get('rsi')) else None
+            if rsi is not None:
+                if rsi < 30:
+                    tech_action = 'BUY'
+                elif rsi > 70:
+                    tech_action = 'SELL'
         
         # Determine sentiment class from Fear & Greed
         if fg_value <= 20:
@@ -372,39 +362,6 @@ class SentimentAnalyzer:
         else:  # 持有觀望
             return "交易訊號: 持有觀望\n• 訊號不明確，建議等待\n風險管理: 暫不建議新開倉位\n主要風險: 方向不明時進場容易兩面挨打"
     
-    def get_full_sentiment_analysis(self, technical_signal: Dict) -> Dict:
-        """
-        Get complete sentiment analysis combining all data sources.
-        
-        Args:
-            technical_signal: Technical analysis results from signal_generator
-            
-        Returns:
-            Complete sentiment analysis dictionary
-        """
-        logger.info("Starting sentiment analysis...")
-        
-        # Fetch all data sources
-        fear_greed = self.fetch_fear_greed_index()
-        news = self.fetch_crypto_news(limit=5)
-        market_data = self.fetch_market_data_summary()
-        
-        # AI synthesis
-        sentiment = self.analyze_sentiment_with_ai(
-            fear_greed=fear_greed,
-            news=news,
-            market_data=market_data,
-            technical_signal=technical_signal
-        )
-        
-        # Add raw data to result
-        sentiment['news_headlines'] = [n['title'] for n in news[:3]]
-        sentiment['market_data'] = {
-            'btc_dominance': market_data.get('btc_dominance', 0),
-            'market_cap_change': market_data.get('market_cap_change_24h', 0)
-        }
-        
-        return sentiment
 
 
 # Test

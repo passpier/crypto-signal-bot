@@ -80,92 +80,109 @@ def main():
         logger.info(f"✓ Fetched {len(df)} data points | Current: ${current_price['price']:,.2f}")
         
         # ============================================
-        # Step 2: Generate Technical Signal
+        # Step 2: Calculate Technical Indicators
         # ============================================
-        logger.info("[2/6] Calculating technical indicators...")
+        logger.info("[2/7] Calculating technical indicators...")
         generator = SignalGenerator()
         df = generator.calculate_indicators(df)
-        signal = generator.generate_signal(df)
-        logger.info(f"✓ Technical Signal: {signal['action']} (strength: {signal['strength']}/5)")
+        logger.info(f"✓ Technical indicators calculated (RSI, MACD, EMA, Bollinger Bands, OBV)")
         
         # ============================================
-        # Step 3: Fetch Sentiment Analysis
+        # Step 3: Fetch Fear & Greed Index
         # ============================================
-        logger.info("[3/6] Analyzing market sentiment...")
+        logger.info("[3/7] Fetching Fear & Greed Index...")
+        analyzer = SentimentAnalyzer()
+        fear_greed = None
+        try:
+            fear_greed = analyzer.fetch_fear_greed_index()
+            logger.info(f"✓ Fear & Greed Index: {fear_greed.get('value', 'N/A')} ({fear_greed.get('classification', 'N/A')})")
+        except Exception as e:
+            logger.warning(f"⚠ Failed to fetch Fear & Greed Index: {e}")
+        
+        # ============================================
+        # Step 4: Fetch Crypto News
+        # ============================================
+        logger.info("[4/7] Fetching crypto news...")
+        news = []
+        try:
+            news = analyzer.fetch_crypto_news(limit=5)
+            logger.info(f"✓ Fetched {len(news)} news articles")
+        except Exception as e:
+            logger.warning(f"⚠ Failed to fetch crypto news: {e}")
+        
+        # ============================================
+        # Step 5: Analyze Sentiment with AI
+        # ============================================
+        logger.info("[5/7] Analyzing sentiment with AI...")
         sentiment = None
         try:
-            analyzer = SentimentAnalyzer()
-            sentiment = analyzer.get_full_sentiment_analysis(signal)
-            logger.info(f"✓ Sentiment: {sentiment.get('sentiment_class', 'N/A')} | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
-            logger.info(f"✓ Consistency: {sentiment.get('consistency', 'N/A')}")
+            if fear_greed:
+                current_price_value = float(current_price['price'])
+                sentiment = analyzer.analyze_sentiment_with_ai(
+                    fear_greed=fear_greed,
+                    news=news,
+                    df_with_indicators=df,
+                    current_price=current_price_value
+                )
+                sentiment['news_headlines'] = [n['title'] for n in news[:3]]
+                logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
+            else:
+                logger.warning("⚠ Skipping AI analysis - Fear & Greed data unavailable")
         except Exception as e:
-            logger.warning(f"⚠ Sentiment analysis failed: {e}")
+            logger.warning(f"⚠ AI sentiment analysis failed: {e}")
             logger.warning("  Continuing with technical analysis only...")
         
         # ============================================
-        # Step 4: Run Backtest for Win Rate
+        # Step 6: Run Backtest for Win Rate
         # ============================================
-        logger.info("[4/6] Running backtest for historical performance...")
-        backtest_stats = None
-        try:
-            from scripts.backtest import SimpleBacktest
-            backtest = SimpleBacktest()
-            backtest_stats = backtest.run_backtest(days=30)
-            logger.info(f"✓ Backtest: {backtest_stats.get('win_rate', 0):.1f}% win rate ({backtest_stats.get('total_trades', 0)} trades)")
-        except Exception as e:
-            logger.warning(f"⚠ Backtest failed: {e}")
+        logger.info("[6/7] Running backtest for historical performance...")
+        #todo: add backtest and fix logic later
+
+        # backtest_stats = None
+        # try:
+        #     from scripts.backtest import SimpleBacktest
+        #     backtest = SimpleBacktest()
+        #     backtest_stats = backtest.run_backtest(days=30)
+        #     logger.info(f"✓ Backtest: {backtest_stats.get('win_rate', 0):.1f}% win rate ({backtest_stats.get('total_trades', 0)} trades)")
+        # except Exception as e:
+        #     logger.warning(f"⚠ Backtest failed: {e}")
         
         # ============================================
-        # Step 5: Determine if Signal Warrants Notification
+        # Step 7: Send Telegram Notification
         # ============================================
-        logger.info("[5/6] Evaluating signal strength for notification...")
+        logger.info("[7/7] Processing notification...")
         
-        # Decide whether to send notification
+        # Create minimal signal dict from DataFrame for Telegram bot compatibility
+        import pandas as pd
+        latest = df.iloc[-1]
+        current_price_value = float(current_price['price'])
+        
+        signal_dict = {
+            'action': 'HOLD',  # AI will determine action
+            'strength': 3,
+            'price': current_price_value,
+            'indicators': {
+                'rsi': float(latest['rsi']) if pd.notna(latest.get('rsi')) else None,
+                'macd': float(latest['macd']) if pd.notna(latest.get('macd')) else None,
+                'ema_12': float(latest['ema_12']) if pd.notna(latest.get('ema_12')) else None,
+                'bb_upper': float(latest['bb_upper']) if pd.notna(latest.get('bb_upper')) else None,
+                'bb_middle': float(latest['bb_middle']) if pd.notna(latest.get('bb_middle')) else None,
+                'bb_lower': float(latest['bb_lower']) if pd.notna(latest.get('bb_lower')) else None,
+                'obv': float(latest['obv']) if pd.notna(latest.get('obv')) else None,
+                'volume_change': float(latest['volume_change']) if pd.notna(latest.get('volume_change')) else 0.0
+            }
+        }
+        
         should_notify = True
-        notification_reason = ""
-        
-        if signal['action'] != 'HOLD':
-            should_notify = True
-            notification_reason = f"Technical {signal['action']} signal (strength {signal['strength']}/5)"
-        elif sentiment:
-            # Check if sentiment provides strong directional signal
-            consistency = sentiment.get('consistency', '')
-            recommendation = sentiment.get('recommendation', '')
-            fear_greed_value = sentiment.get('fear_greed_value', 50)
-            
-            # Contrarian logic: Extreme Fear/Greed can override neutral technical signals
-            if fear_greed_value <= 25:  # Extreme Fear - contrarian BUY opportunity
-                should_notify = True
-                notification_reason = f"Contrarian BUY: Extreme Fear ({fear_greed_value}) + Neutral Technical"
-            elif fear_greed_value >= 75:  # Extreme Greed - contrarian SELL opportunity
-                should_notify = True
-                notification_reason = f"Contrarian SELL: Extreme Greed ({fear_greed_value}) + Neutral Technical"
-            elif consistency in ['一致看多', '一致看空']:
-                should_notify = True
-                notification_reason = f"Sentiment consistency: {consistency}"
-            elif recommendation in ['積極買入', '立即止損']:
-                should_notify = True
-                notification_reason = f"AI recommendation: {recommendation}"
-        
-        if should_notify:
-            logger.info(f"✓ Notification triggered: {notification_reason}")
-        else:
-            logger.info("✓ No clear signal - skipping notification")
-        
-        # ============================================
-        # Step 6: Send Enhanced Telegram Notification
-        # ============================================
-        logger.info("[6/6] Processing notification...")
         
         if should_notify:
             try:
                 notifier = TelegramNotifier()
                 asyncio.run(notifier.send_signal(
-                    signal=signal,
+                    signal=signal_dict,
                     sentiment=sentiment,
-                    backtest_stats=backtest_stats
                 ))
-                logger.info("✓ Enhanced signal sent to Telegram!")
+                logger.info("✓ Signal sent to Telegram!")
             except Exception as e:
                 logger.error(f"✗ Failed to send Telegram notification: {e}")
         else:
@@ -179,24 +196,22 @@ def main():
         logger.info("=" * 60)
         
         output = {
-            'action': signal['action'],
-            'strength': signal['strength'],
-            'price': signal['price'],
+            'action': 'HOLD',  # Determined by AI analysis
+            'price': current_price_value,
             'technical': {
-                'rsi': signal['indicators'].get('rsi'),
-                'macd': signal['indicators'].get('macd'),
-                'price_change_24h': signal['indicators'].get('price_change_24h')
+                'rsi': signal_dict['indicators'].get('rsi'),
+                'macd': signal_dict['indicators'].get('macd'),
+                'ema_12': signal_dict['indicators'].get('ema_12'),
+                'volume_change': signal_dict['indicators'].get('volume_change')
             },
             'sentiment': {
                 'fear_greed': sentiment.get('fear_greed_value') if sentiment else None,
-                'sentiment_class': sentiment.get('sentiment_class') if sentiment else None,
-                'consistency': sentiment.get('consistency') if sentiment else None,
-                'recommendation': sentiment.get('recommendation') if sentiment else None
+                'ai_advice': sentiment.get('ai_advice_text') if sentiment else None
             } if sentiment else None,
-            'backtest': {
-                'win_rate': backtest_stats.get('win_rate') if backtest_stats else None,
-                'total_trades': backtest_stats.get('total_trades') if backtest_stats else None
-            } if backtest_stats else None,
+            # 'backtest': {
+            #     'win_rate': backtest_stats.get('win_rate') if backtest_stats else None,
+            #     'total_trades': backtest_stats.get('total_trades') if backtest_stats else None
+            # } if backtest_stats else None,
             'notification_sent': should_notify,
             'timestamp': str(df.iloc[-1]['timestamp']) if 'timestamp' in df.columns else None
         }
