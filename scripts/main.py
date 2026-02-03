@@ -14,7 +14,7 @@ from scripts.signal_generator import SignalGenerator
 from scripts.telegram_bot import TelegramNotifier
 from scripts.sentiment_analyzer import SentimentAnalyzer
 from scripts.utils import get_project_root, validate_config, load_config
-
+from scripts.coinglass_fetcher import CoinglassFetcher
 # Detect if running in Azure Functions
 IS_AZURE_FUNCTIONS = os.getenv('FUNCTIONS_WORKER_RUNTIME') is not None or \
                      os.getenv('WEBSITE_INSTANCE_ID') is not None
@@ -99,10 +99,25 @@ def main():
         except Exception as e:
             logger.warning(f"⚠ Failed to fetch Fear & Greed Index: {e}")
         
+
         # ============================================
-        # Step 4: Fetch Crypto News
+        # Step 4: Fetch Institutional Data (Coinglass)
         # ============================================
-        logger.info("[4/7] Fetching crypto news...")
+        logger.info("[4/7] Fetching institutional data from Coinglass...")
+        institutional_data = None
+        try:
+            cg_fetcher = CoinglassFetcher()
+            institutional_data = cg_fetcher.fetch_all_institutional_data(
+                symbol=config['trading']['symbol'].replace('USDT', '')
+            )
+            logger.info(f"✓ Institutional data fetched")
+        except Exception as e:
+            logger.warning(f"⚠ Failed to fetch Coinglass data: {e}")
+
+        # ============================================
+        # Step 5: Fetch Crypto News
+        # ============================================
+        logger.info("[5/7] Fetching crypto news...")
         news = []
         try:
             news = analyzer.fetch_crypto_news(limit=5)
@@ -111,9 +126,9 @@ def main():
             logger.warning(f"⚠ Failed to fetch crypto news: {e}")
         
         # ============================================
-        # Step 5: Analyze Sentiment with AI
+        # Step 6: Analyze Sentiment with AI
         # ============================================
-        logger.info("[5/7] Analyzing sentiment with AI...")
+        logger.info("[6/7] Analyzing sentiment with AI...")
         sentiment = None
         try:
             if fear_greed:
@@ -122,7 +137,8 @@ def main():
                     fear_greed=fear_greed,
                     news=news,
                     df_with_indicators=df,
-                    current_price=current_price_value
+                    current_price=current_price_value,
+                    institutional_data=institutional_data 
                 )
                 sentiment['news_headlines'] = [n['title'] for n in news[:3]]
                 logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
@@ -133,9 +149,9 @@ def main():
             logger.warning("  Continuing with technical analysis only...")
         
         # ============================================
-        # Step 6: Run Backtest for Win Rate
+        # Step 7: Run Backtest for Win Rate
         # ============================================
-        logger.info("[6/7] Running backtest for historical performance...")
+        logger.info("[7/7] Running backtest for historical performance...")
         #todo: add backtest and fix logic later
 
         # backtest_stats = None
@@ -148,7 +164,7 @@ def main():
         #     logger.warning(f"⚠ Backtest failed: {e}")
         
         # ============================================
-        # Step 7: Send Telegram Notification
+        # Step 8: Send Telegram Notification
         # ============================================
         logger.info("[7/7] Processing notification...")
         
@@ -204,6 +220,11 @@ def main():
                 'ema_12': signal_dict['indicators'].get('ema_12'),
                 'volume_change': signal_dict['indicators'].get('volume_change')
             },
+            'institutional': {
+                'etf_net_flow': institutional_data['etf_flows']['net_flow'] if institutional_data and institutional_data.get('etf_flows') else None,
+                'liquidations_24h': institutional_data['liquidations']['total_liquidation'] if institutional_data and institutional_data.get('liquidations') else None,
+                'long_short_ratio': institutional_data['long_short_ratio']['ratio'] if institutional_data and institutional_data.get('long_short_ratio') else None
+            } if institutional_data else None,
             'sentiment': {
                 'fear_greed': sentiment.get('fear_greed_value') if sentiment else None,
                 'ai_advice': sentiment.get('ai_advice_text') if sentiment else None

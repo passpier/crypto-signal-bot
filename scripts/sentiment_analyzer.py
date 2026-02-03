@@ -41,52 +41,14 @@ class SentimentAnalyzer:
             try:
                 gemini_key = self.config['api_keys'].get('gemini_api_key', '')
                 if gemini_key and gemini_key != "YOUR_GEMINI_API_KEY":
-                    response_schema = {
-                        "type": "object",
-                        "properties": {
-                            "signal": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
-                            "strength": {"type": "integer"},
-                            "entry_range": {"type": "object","properties": {
-                                "low": {"type": "number"},
-                                "high": {"type": "number"}
-                                }
-                            },
-                            "target_price": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "price": {"type": "number"},
-                                        "allocation": {"type": "number"}
-                                    }
-                                }
-                            },
-                            "stop_loss_price": {
-                                "type": "object",
-                                "properties": {
-                                    "price": {"type": "number"},
-                                    "percentage": {"type": "number"}
-                                }
-                            },
-                            "risk_reward_ratio": {"type": "number"},
-                            "key_factors": {
-                                "type": "array",
-                                "items": {"type": "string"}
-                            },
-                            "risk_management": {"type": "string"},
-                            "main_risk": {"type": "string"}
-                        }
-                    }
                     genai.configure(api_key=gemini_key)
                     self.model = genai.GenerativeModel(
                         model_name="gemini-2.5-flash-lite",
                         generation_config={
                             "temperature": 0.3,
-                            "max_output_tokens": 1024,
+                            "max_output_tokens": 2048,
                             "top_p": 0.95,
-                            "top_k": 40, 
-                            "response_mime_type": "application/json",
-                            "response_schema": response_schema
+                            "top_k": 40
                         }
                     )
                     logger.info("Sentiment analyzer initialized with Gemini 2.5 Flash Lite")
@@ -182,7 +144,8 @@ class SentimentAnalyzer:
         fear_greed: Dict,
         news: List[Dict],
         df_with_indicators: pd.DataFrame,
-        current_price: float
+        current_price: float,
+        institutional_data: Dict
     ) -> Dict:
         """
         Use Gemini AI to synthesize all data into actionable sentiment analysis.
@@ -192,7 +155,7 @@ class SentimentAnalyzer:
             news: List of news articles
             df_with_indicators: DataFrame with calculated technical indicators
             current_price: Current BTCUSDT price
-            
+            institutional_data: Institutional data
         Returns:
             Dictionary with AI sentiment analysis
         """
@@ -252,10 +215,43 @@ class SentimentAnalyzer:
             # Format OBV and Volume for prompt
             obv_str = f"{obv_change_pct:+.1f}%" if obv_change_pct is not None else "N/A"
             vol_str = f"{tech_volume_change:+.1f}%"
+
+            institutional_prompt = ""
+            etf_net = None
+            liq_total = None
+            lsr_ratio = None
+            if institutional_data:
+                try:
+                    etf_net = institutional_data.get('etf_flows', {}).get('net_flow', 0) / 1e6
+                    liq_total = institutional_data.get('liquidations', {}).get('total_liquidation', 0) / 1e6
+                    lsr_ratio = institutional_data.get('long_short_ratio', {}).get('ratio', 1.0)
+                    funding_pct = institutional_data.get('funding_rate', {}).get('rate_pct', 0)
+                    
+                    etf_signal = "bullish" if etf_net > 50 else "bearish" if etf_net < -50 else "neutral"
+                    lsr_signal = "shorts" if lsr_ratio < 0.9 else "longs" if lsr_ratio > 1.1 else "balanced"
+                    funding_signal = "overheat" if funding_pct > 0.1 else "oversold" if funding_pct < -0.05 else "neutral"
+
+                    institutional_prompt = f"""
+                    Inst Data:
+                    ETF:${etf_net:.0f}M({etf_signal}) Liq:${liq_total:.0f}M L/S:{lsr_ratio:.2f}({lsr_signal}) FR:{funding_pct:.3f}%({funding_signal})
+                    """
+                except Exception as e:
+                    logger.warning(f"⚠ Failed to format institutional data: {e}")
+                    institutional_prompt = ""
             
             # Updated prompt with new format
-            prompt = f"""BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str}
-            Swing trade recommendation. strength：1–5，key_factors需1技術+1情緒理由，risk_management需倉位%與分批策略，main_risk需價格情境。中文輸出。
+            prompt = f"""BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str} {institutional_prompt} 
+輸出格式（嚴格按此，方便解析）：
+訊號: BUY/SELL/HOLD
+強度: 1-5
+入場: 低點-高點
+目標: 價格 (+漲幅%)
+停損: 價格 (-跌幅%)
+風報比: 1:X.X
+理由: 1技術+1情緒因素，100字內
+倉位: 建議%+分批策略
+風險: 價格跌破XX情境
+直接輸出，不要 JSON。
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
@@ -274,7 +270,12 @@ class SentimentAnalyzer:
                 'ai_generated': True,
                 'ai_advice_text': ai_text,  # Store cleaned AI output for Telegram
                 'fear_greed_value': fear_greed_value,
-                'fear_greed_class': fear_greed_class
+                'fear_greed_class': fear_greed_class,
+                'institutional_summary': {
+                    'etf_net_m': etf_net if institutional_data else None,
+                    'liq_total_m': liq_total if institutional_data else None,
+                    'lsr_ratio': lsr_ratio if institutional_data else None
+                } if institutional_data else None
             }
             
             logger.info(f"AI Sentiment analysis completed (Fear & Greed: {result['fear_greed_value']})")

@@ -1,12 +1,11 @@
 """Telegram notification module for sending trading signals."""
 import asyncio
 import logging
-import json
+import re
 from typing import Dict, Optional
 from pathlib import Path
 import sys
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
@@ -26,12 +25,7 @@ class TelegramNotifier:
     """Handles Telegram notifications for trading signals."""
     
     def __init__(self, config_path: Optional[str] = None):
-        """
-        Initialize Telegram notifier.
-        
-        Args:
-            config_path: Path to config file. Defaults to config/config.yaml
-        """
+        """Initialize Telegram notifier."""
         if not TELEGRAM_AVAILABLE:
             raise ImportError("python-telegram-bot is required for Telegram notifications")
         
@@ -49,29 +43,86 @@ class TelegramNotifier:
         self.chat_id = str(telegram_chat_id)
         logger.info("Telegram notifier initialized")
     
-    def _parse_ai_advice_json(self, ai_advice_text: str) -> Optional[Dict]:
+    def _parse_text_signal(self, ai_text: str) -> Dict:
         """
-        Parse AI advice JSON string.
-        
-        Args:
-            ai_advice_text: JSON string from AI analysis
-            
-        Returns:
-            Parsed dictionary or None if parsing fails
+        Parse structured text with better tolerance for formatting variations.
         """
-        if not ai_advice_text or not ai_advice_text.strip():
-            return None
+        if not ai_text or not ai_text.strip():
+            return {}
         
         try:
-            # Try to parse JSON
-            parsed = json.loads(ai_advice_text)
-            return parsed
-        except json.JSONDecodeError:
-            # If not JSON, return None
-            return None
+            data = {}
+            
+            # Parse signal
+            signal_match = re.search(r'訊號[:：]\s*(BUY|SELL|HOLD|買入|賣出|觀望)', ai_text, re.IGNORECASE)
+            if signal_match:
+                signal_map = {'買入': 'BUY', '賣出': 'SELL', '觀望': 'HOLD'}
+                raw_signal = signal_match.group(1)
+                data['signal'] = signal_map.get(raw_signal, raw_signal.upper())
+            
+            # Parse strength
+            strength_match = re.search(r'強度[:：]\s*(\d)', ai_text)
+            if strength_match:
+                data['strength'] = int(strength_match.group(1))
+            
+            # === FIX: Parse entry range (allow $ and commas) ===
+            entry_match = re.search(r'入場[:：]\s*\$?([\d,]+)\s*[-~]\s*\$?([\d,]+)', ai_text)
+            if entry_match:
+                data['entry_range'] = {
+                    'low': float(entry_match.group(1).replace(',', '')),
+                    'high': float(entry_match.group(2).replace(',', ''))
+                }
+            
+            # === FIX: Parse target (allow $ and commas) ===
+            target_match = re.search(r'目標[:：]\s*\$?([\d,]+)\s*\(([+-]?[\d.]+)%\)', ai_text)
+            if target_match:
+                price = float(target_match.group(1).replace(',', ''))
+                pct = abs(float(target_match.group(2)))  # Remove sign for display
+                data['target_price'] = [{
+                    'price': price,
+                    'percentage': pct
+                }]
+            
+            # === FIX: Parse stop loss (allow $ and commas) ===
+            stop_match = re.search(r'停損[:：]\s*\$?([\d,]+)\s*\(([+-]?[\d.]+)%\)', ai_text)
+            if stop_match:
+                price = float(stop_match.group(1).replace(',', ''))
+                pct = abs(float(stop_match.group(2)))
+                data['stop_loss_price'] = {
+                    'price': price,
+                    'percentage': pct
+                }
+            
+            # Parse risk-reward (allow colon or Chinese colon)
+            rr_match = re.search(r'風報比[:：]\s*1[:：]([\d.]+)', ai_text)
+            if rr_match:
+                data['risk_reward_ratio'] = float(rr_match.group(1))
+            
+            # === FIX: Parse analysis (handle escaped \n) ===
+            # Replace escaped newlines with actual newlines first
+            ai_text_clean = ai_text.replace('\\n', '\n')
+            
+            reason_match = re.search(r'理由[:：]\s*(.+?)(?=\n?倉位|\n?風險|$)', ai_text_clean, re.DOTALL)
+            if reason_match:
+                reasons_text = reason_match.group(1).strip()
+                data['key_factors'] = [reasons_text]
+            
+            # Parse risk management
+            position_match = re.search(r'倉位[:：]\s*(.+?)(?=\n?風險|$)', ai_text_clean, re.DOTALL)
+            if position_match:
+                data['risk_management'] = position_match.group(1).strip()
+            
+            # Parse main risk
+            risk_match = re.search(r'風險[:：]\s*(.+?)$', ai_text_clean, re.DOTALL)
+            if risk_match:
+                data['main_risk'] = risk_match.group(1).strip()
+            
+            logger.info(f"Parsed {len(data)} fields from AI text")
+            return data
+            
         except Exception as e:
-            logger.warning(f"Failed to parse AI advice JSON: {e}")
-            return None
+            logger.warning(f"Failed to parse AI text: {e}")
+            return {}
     
     async def send_signal(
         self, 
@@ -79,23 +130,21 @@ class TelegramNotifier:
         sentiment: Optional[Dict] = None,
     ) -> bool:
         """
-        Send simplified trading signal to Telegram.
+        Send formatted trading signal to Telegram.
         
         Args:
-            signal: Signal dictionary with action, price, indicators, etc.
-            sentiment: Sentiment analysis results from sentiment_analyzer
+            signal: Signal dictionary with action, price, indicators
+            sentiment: Sentiment analysis with ai_advice_text
             
         Returns:
-            True if message sent successfully, False otherwise
+            True if sent successfully
         """
         try:
-            # Get AI advice from sentiment
+            # Get AI advice and parse
             ai_advice_text = sentiment.get('ai_advice_text', '') if sentiment else ''
+            ai_data = self._parse_text_signal(ai_advice_text)
             
-            # Try to parse JSON
-            ai_data = self._parse_ai_advice_json(ai_advice_text)
-            
-            # Get data from signal and sentiment
+            # Get basic data
             current_price = signal.get('price', 0)
             rsi = signal['indicators'].get('rsi') if signal.get('indicators') else None
             macd = signal['indicators'].get('macd') if signal.get('indicators') else None
@@ -103,131 +152,134 @@ class TelegramNotifier:
             fear_greed_value = sentiment.get('fear_greed_value') if sentiment else None
             fear_greed_class = sentiment.get('fear_greed_class', 'Neutral') if sentiment else 'Neutral'
             
-            # Map action to Chinese
-            action_map = {
-                'BUY': '買入',
-                'SELL': '賣出',
-                'HOLD': '觀望'
-            }
+            # Get institutional data (if available)
+            inst_summary = sentiment.get('institutional_summary', {}) if sentiment else {}
+            etf_net = inst_summary.get('etf_net_m') if inst_summary else None
+            lsr_ratio = inst_summary.get('lsr_ratio') if inst_summary else None
             
-            # Use AI data if available, otherwise fallback to signal
-            if ai_data:
-                signal_action = ai_data.get('signal', signal.get('action', 'HOLD'))
-                signal_strength = ai_data.get('strength', signal.get('strength', 3))
-                entry_range = ai_data.get('entry_range', {})
-                target_price = ai_data.get('target_price', [])
-                stop_loss = ai_data.get('stop_loss_price', {})
-                risk_reward = ai_data.get('risk_reward_ratio', 0)
-                risk_management = ai_data.get('risk_management', '')
-                main_risk = ai_data.get('main_risk', '')
-                key_factors = ai_data.get('key_factors', [])
-            else:
-                # Fallback to signal data or empty
-                signal_action = signal.get('action', 'HOLD')
-                signal_strength = signal.get('strength', 3)
-                entry_range = {}
-                target_price = []
-                stop_loss = {}
-                risk_reward = 0
-                risk_management = ''
-                main_risk = ''
-                key_factors = []
+            # Action mapping
+            action_map = {'BUY': '買入', 'SELL': '賣出', 'HOLD': '觀望'}
+            
+            # Use AI data if available, else fallback
+            signal_action = ai_data.get('signal', signal.get('action', 'HOLD'))
+            signal_strength = ai_data.get('strength', signal.get('strength', 3))
+            entry_range = ai_data.get('entry_range', {})
+            target_price = ai_data.get('target_price', [])
+            stop_loss = ai_data.get('stop_loss_price', {})
+            risk_reward = ai_data.get('risk_reward_ratio', 0)
+            risk_management = ai_data.get('risk_management', '')
+            main_risk = ai_data.get('main_risk', '')
+            key_factors = ai_data.get('key_factors', [])
             
             action_text = action_map.get(signal_action, '觀望')
             
-            # Build message
-            message = f"🔔 BTC {action_text}訊號 ({signal_strength}/5)\n\n"
+            # === Build formatted message ===
             
-            # Entry range
+            # Header with emoji
+            action_emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}
+            emoji = action_emoji.get(signal_action, '🟡')
+            
+            message = f"{emoji} **BTC {action_text}訊號** ({signal_strength}/5)\n\n"
+            
+            # Price section
+            message += "**價格資訊**\n"
+            if current_price > 0:
+                message += f"現價: ${current_price:,.0f}\n"
+            
             if entry_range:
                 entry_low = entry_range.get('low', 0)
                 entry_high = entry_range.get('high', 0)
                 if entry_low and entry_high:
                     message += f"入場: ${entry_low:,.0f}-${entry_high:,.0f}\n"
             
-            # Current price
-            if current_price > 0:
-                message += f"現價: ${current_price:,.0f}\n"
-            
-            message += "━━━━━━━━━━━━━━━━\n"
-            
-            # Target price
             if target_price and len(target_price) > 0:
-                # Use first target price
                 first_target = target_price[0]
                 target_price_value = first_target.get('price', 0)
-                if target_price_value > 0 and current_price > 0:
-                    target_pct = ((target_price_value / current_price) - 1) * 100
-                    message += f"目標: ${target_price_value:,.0f} (+{target_pct:.1f}%)\n"
+                target_pct = first_target.get('percentage', 0)
+                if target_price_value > 0:
+                    if target_pct:
+                        message += f"目標: ${target_price_value:,.0f} (+{target_pct:.1f}%)\n"
+                    else:
+                        message += f"目標: ${target_price_value:,.0f}\n"
             
-            # Stop loss
             if stop_loss:
-                stop_loss_price_value = stop_loss.get('price', 0)
-                stop_loss_pct = stop_loss.get('percentage', 0)
-                if stop_loss_price_value > 0:
-                    message += f"停損: ${stop_loss_price_value:,.0f}"
-                    if stop_loss_pct > 0:
-                        message += f" (-{stop_loss_pct:.1f}%)"
-                    message += "\n"
+                stop_price = stop_loss.get('price', 0)
+                stop_pct = stop_loss.get('percentage', 0)
+                if stop_price > 0:
+                    if stop_pct:
+                        message += f"停損: ${stop_price:,.0f} (-{stop_pct:.1f}%)\n"
+                    else:
+                        message += f"停損: ${stop_price:,.0f}\n"
             
-            # Risk-reward ratio
             if risk_reward > 0:
                 message += f"風報比: 1:{risk_reward:.1f}\n"
             
             message += "━━━━━━━━━━━━━━━━\n"
             
-            # Indicators
+            # Technical indicators
+            message += "**技術指標**\n"
             indicator_parts = []
             if rsi is not None:
                 indicator_parts.append(f"RSI {rsi:.0f}")
-            
             if macd is not None:
                 macd_text = "多頭" if macd > 0 else "空頭"
                 indicator_parts.append(f"MACD {macd_text}")
-            
             if indicator_parts:
                 message += " | ".join(indicator_parts) + "\n"
             
-            # Fear & Greed
+            # Market sentiment
             if fear_greed_value is not None:
                 message += f"恐懼指數: {fear_greed_value}/100 ({fear_greed_class})\n"
             
-            # Volume change
             if volume_change != 0:
-                message += f"成交量 {volume_change:+.0f}%\n"
+                message += f"成交量: {volume_change:+.0f}%\n"
             
-            # Risk management
-            if risk_management:
-                message += f"\n💡風險管理建議: {risk_management}\n"
+            # Institutional data (if available)
+            if etf_net is not None or lsr_ratio is not None:
+                message += "\n**機構數據**\n"
+                if etf_net is not None:
+                    message += f"ETF 淨流: ${etf_net:.0f}M\n"
+                if lsr_ratio is not None:
+                    message += f"多空比: {lsr_ratio:.2f}\n"
             
-            # Main risk
-            if main_risk:
-                message += f"⚠️主要風險: {main_risk}\n"
+            message += "━━━━━━━━━━━━━━━━\n"
             
-            # Key factors
+            # Analysis sections
             if key_factors:
-                message += "關鍵因素:\n"
-                # Show first 3 key factors
-                for factor in key_factors[:3]:
-                    message += f"   • {factor}\n"
+                message += "💡 **分析理由**\n"
+                for i, factor in enumerate(key_factors[:3], 1):
+                    # Clean up factor text
+                    factor_clean = factor.strip()
+                    message += f"{factor_clean}\n"
+                message += "\n"
             
-            # If no AI data, show raw text
+            if risk_management:
+                message += f"📋 **倉位管理**\n{risk_management}\n\n"
+            
+            if main_risk:
+                message += f"⚠️ **風險提示**\n{main_risk}\n\n"
+            
+            # If parsing failed, show raw AI text
             if not ai_data and ai_advice_text:
-                message += f"\n🤖AI分析結果:\n\n{ai_advice_text}"
+                message += "━━━━━━━━━━━━━━━━\n\n"
+                message += "🤖 **AI 完整分析**\n\n"
+                message += ai_advice_text
             
-            # Add interactive button
+            # Add TradingView button
             keyboard = [
                 [InlineKeyboardButton(
                     "📊 查看圖表", 
-                    url=f"https://www.tradingview.com/chart/?symbol=BTCUSDT"
+                    url="https://www.tradingview.com/chart/?symbol=BTCUSDT"
                 )],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
+            # Send with Markdown formatting
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=message,
-                reply_markup=reply_markup
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
             )
             
             logger.info(f"Sent signal to Telegram: {action_text} ({signal_strength}/5)")
@@ -241,24 +293,16 @@ class TelegramNotifier:
             return False
     
     async def send_backtest_results(self, results: Dict) -> bool:
-        """
-        Send backtest results to Telegram.
-        
-        Args:
-            results: Dictionary with backtest statistics
-            
-        Returns:
-            True if message sent successfully, False otherwise
-        """
+        """Send backtest results to Telegram."""
         try:
             message = f"""
-📊 **策略回測報告** (過去30天)
+**策略回測報告** (過去30天)
 
-✅ 成功訊號: {results['wins']}次
-❌ 失敗訊號: {results['losses']}次
-📈 勝率: {results['win_rate']:.1f}%
-💰 平均獲利: {results['avg_profit']:+.2f}%
-📉 最大回撤: {results['max_drawdown']:.2f}%
+成功訊號: {results['wins']}次
+失敗訊號: {results['losses']}次
+勝率: {results['win_rate']:.1f}%
+平均獲利: {results['avg_profit']:+.2f}%
+最大回撤: {results['max_drawdown']:.2f}%
 """
             if 'best_trade' in results:
                 message += f"🏆 最佳交易: +{results['best_trade']:.2f}%\n"
@@ -295,43 +339,39 @@ if __name__ == "__main__":
     try:
         notifier = TelegramNotifier()
         
-        # Simulate test signal
-        test_signal = {
-            'action': 'BUY',
-            'strength': 4,
-            'price': 89642,
-            'entry_range': (89500, 89800),
-            'stop_loss': 87800,
-            'take_profit': 92500,
-            'risk_reward': 1.7,
-            'reasons': ['RSI 28 超賣反彈', 'MACD黃金交叉'],
-            'technical_summary': '技術面轉強',
-            'indicators': {
-                'rsi': 28,
-                'macd': 0.05,
-                'volume_change': 45,
-                'price_change_24h': -2.71
+        # Test with structured text AI output
+        test_sentiment = {
+            'ai_advice_text': """訊號: HOLD
+強度: 3
+入場: 77500-78000
+目標: 80500 (+3.2%)
+停損: 76800 (-2.1%)
+風報比: 1:1.5
+理由: 極度恐懼但ETF流出，RSI中性MACD轉多，技術面未破位但機構觀望
+倉位: 20%輕倉試探，分3批進場，每批間隔1H
+風險: 跌破76500確認空頭，目標74000""",
+            'fear_greed_value': 17,
+            'fear_greed_class': 'Extreme Fear',
+            'institutional_summary': {
+                'etf_net_m': -492.9,
+                'lsr_ratio': 2.67
             }
         }
         
-        # Test sentiment
-        test_sentiment = {
-            'fear_greed_value': 29,
-            'fear_greed_class': 'Fear',
-            'sentiment_class': '恐懼',
-            'consistency': '一致看多',
-            'recommendation': '分批建倉'
+        test_signal = {
+            'action': 'HOLD',
+            'strength': 3,
+            'price': 78478,
+            'indicators': {
+                'rsi': 55,
+                'macd': 160,
+                'volume_change': -64.9
+            }
         }
         
-        # Test backtest stats
-        test_backtest = {
-            'win_rate': 78,
-            'total_trades': 45
-        }
-        
-        asyncio.run(notifier.send_signal(test_signal, test_sentiment, test_backtest))
+        asyncio.run(notifier.send_signal(test_signal, test_sentiment))
         print("✅ Test signal sent successfully!")
+        
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         sys.exit(1)
-
