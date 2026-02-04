@@ -15,6 +15,7 @@ from scripts.telegram_bot import TelegramNotifier
 from scripts.sentiment_analyzer import SentimentAnalyzer
 from scripts.utils import get_project_root, validate_config, load_config
 from scripts.coinglass_fetcher import CoinglassFetcher
+from scripts.crypto_news_fetcher import CryptoNewsFetcher
 # Detect if running in Azure Functions
 IS_AZURE_FUNCTIONS = os.getenv('FUNCTIONS_WORKER_RUNTIME') is not None or \
                      os.getenv('WEBSITE_INSTANCE_ID') is not None
@@ -120,7 +121,8 @@ def main():
         logger.info("[5/7] Fetching crypto news...")
         news = []
         try:
-            news = analyzer.fetch_crypto_news(limit=5)
+            news_fetcher = CryptoNewsFetcher()
+            news = news_fetcher.fetch_crypto_news(limit=3)
             logger.info(f"✓ Fetched {len(news)} news articles")
         except Exception as e:
             logger.warning(f"⚠ Failed to fetch crypto news: {e}")

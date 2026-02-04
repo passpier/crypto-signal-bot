@@ -102,43 +102,6 @@ class SentimentAnalyzer:
                 'error': str(e)
             }
     
-    def fetch_crypto_news(self, limit: int = 10) -> List[Dict]:
-        """
-        Fetch recent crypto news from CryptoCompare API (free tier).
-        
-        Args:
-            limit: Number of news articles to fetch
-            
-        Returns:
-            List of news articles with title, source, and sentiment hints
-        """
-        try:
-            # CryptoCompare News API (free, no key needed for basic)
-            url = f"https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC&excludeCategories=Sponsored"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            if 'Data' not in data:
-                raise ValueError("No news data available")
-            
-            articles = []
-            for article in data['Data'][:limit]:
-                articles.append({
-                    'title': article.get('title', ''),
-                    'source': article.get('source', ''),
-                    'published': datetime.fromtimestamp(article.get('published_on', 0)).strftime('%Y-%m-%d %H:%M'),
-                    'url': article.get('url', ''),
-                    'categories': article.get('categories', '')
-                })
-            
-            logger.info(f"Fetched {len(articles)} news articles")
-            return articles
-            
-        except Exception as e:
-            logger.warning(f"Failed to fetch crypto news: {e}")
-            return []
-    
     def analyze_sentiment_with_ai(
         self,
         fear_greed: Dict,
@@ -239,19 +202,40 @@ class SentimentAnalyzer:
                     logger.warning(f"⚠ Failed to format institutional data: {e}")
                     institutional_prompt = ""
             
+
+            news_context = ""
+            if news and len(news) > 0:
+                headlines = [article['title'] for article in news[:3]]
+                news_context = f"Recent News: {' | '.join(headlines)}"
             # Updated prompt with new format
-            prompt = f"""BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str} {institutional_prompt} 
-輸出格式（嚴格按此，方便解析）：
+            prompt = f"""You are a professional crypto quant analyst who combines technical indicators, sentiment, and news to make risk-controlled trading decisions.
+            BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str} {institutional_prompt}
+            {news_context}
+Output format (exact):
 訊號: BUY/SELL/HOLD
 強度: 1-5
+信心評分: 1-10(1=隨機 5=勉強 8=高確定 10=極罕見機會)
 入場: 低點-高點
 目標: 價格 (+漲幅%)
 停損: 價格 (-跌幅%)
 風報比: 1:X.X
-理由: 1技術+1情緒因素，100字內
+理由: 技術+情緒+機構+新聞各1點，120字內
 倉位: 建議%+分批策略
 風險: 價格跌破XX情境
-直接輸出，不要 JSON。
+設定類型分析:
+類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號]
+模式特徵: [此類設定的3個關鍵特徵]
+典型表現: 
+  - 勝率範圍: XX-XX%
+  - 平均持有: X-Y天
+  - 常見回撤: -X%
+  - 最佳進場時機: [具體描述]
+  - 常見失敗原因: [1-2個陷阱]
+本次評估:
+  - 與典型案例相比: [更強/相當/較弱]
+  - 特殊風險: [本次獨特風險點]
+  - 成功機率: [基於上述分析的評估]
+直接輸出，不要JSON，不要編造具體日期。
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly

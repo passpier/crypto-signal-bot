@@ -5,8 +5,7 @@ import os
 
 app = func.FunctionApp()
 
-# Get CRON schedule from environment variable, default to every 4 hours
-CRON_SCHEDULE = os.getenv('CRON_SCHEDULE', '0 0 */4 * * *')
+CRON_SCHEDULE = os.getenv("CRON_SCHEDULE", "0 0 0 * * *")
 
 @app.timer_trigger(
     schedule=CRON_SCHEDULE,
@@ -19,11 +18,11 @@ def crypto_signal_timer(myTimer: func.TimerRequest) -> None:
     Timer-triggered function for crypto signal bot.
     
     Schedule: Configurable via CRON_SCHEDULE environment variable
-    Default CRON: "0 0 */4 * * *" (every 4 hours at minute 0)
+    Default CRON: "0 0 0 * * *" (once a day at midnight)
     
     To configure in Azure Functions:
     - Azure Portal > Function App > Configuration > Application Settings
-    - Add: CRON_SCHEDULE = "0 0 */4 * * *"
+    - Add: CRON_SCHEDULE = "0 0 0 * * *"
     """
     logger = logging.getLogger(__name__)
     
@@ -45,9 +44,23 @@ def crypto_signal_timer(myTimer: func.TimerRequest) -> None:
         if exit_code == 0:
             logger.info('Bot execution completed successfully')
         else:
-            logger.error(f'Bot execution failed with exit code: {exit_code}')
-            
+            error_msg = f'✗ Bot execution failed with exit code: {exit_code}'
+            logger.error(error_msg)
+            # Raise exception to mark function execution as failed in Azure
+            raise RuntimeError(error_msg)
+    except ImportError as e:
+        logger.error(f'Import error - check deployment structure: {e}', exc_info=True)
+        raise        
     except Exception as e:
         logger.error(f'Function execution failed: {e}', exc_info=True)
         raise
 
+@app.function_name(name="HealthCheck")
+@app.route(route="health", methods=["GET"])
+def health_check(req: func.HttpRequest) -> func.HttpResponse:
+    """Simple health check endpoint."""
+    return func.HttpResponse(
+        body='{"status": "healthy", "service": "crypto-signal-bot"}',
+        mimetype="application/json",
+        status_code=200
+    )
