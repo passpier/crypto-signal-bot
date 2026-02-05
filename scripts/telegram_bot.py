@@ -116,7 +116,7 @@ class TelegramNotifier:
             ai_text_clean = ai_text.replace('\\n', '\n')
             
             # Define common sections
-            next_sections = r'(?=\n?倉位|\n?風險|\n?設定類型分析|\n?類型|\n?模式特徵|\n?典型表現|\n?本次評估|$)'
+            next_sections = r'(?=\n?倉位|\n?風險|\n?設定類型分析|\n?類型|\n?模式特徵|\n?典型表現|\n?常見失敗|\n?本次評估|$)'
             
             # Parse reason
             reason_match = re.search(r'理由[:：]\s*(.+?)' + next_sections, ai_text_clean, re.DOTALL)
@@ -146,18 +146,17 @@ class TelegramNotifier:
                 re.DOTALL
             )
             if char_section:
-                char_text = char_section.group(1)
+                char_text = char_section.group(1).strip()
                 char_items = re.findall(r'(?:[-•\d]+\.?)\s*(.+?)(?=\n|$)', char_text)
                 characteristics = [c.strip() for c in char_items if c.strip()]
+                
+                # Fallback: if no bullet points found but there is text, use it as a single item
+                if not characteristics and char_text:
+                    characteristics = [char_text]
             data['pattern_characteristics'] = characteristics
             
             # Parse typical performance
             typical_perf = {}
-            
-            win_rate_match = re.search(r'勝率(?:範圍)?[:：]\s*([\d.]+)[-~]([\d.]+)%', ai_text_clean)
-            if win_rate_match:
-                typical_perf['win_rate_min'] = float(win_rate_match.group(1))
-                typical_perf['win_rate_max'] = float(win_rate_match.group(2))
             
             holding_perf_match = re.search(r'平均持有[:：]\s*(\d+)[-~](\d+)天', ai_text_clean)
             if holding_perf_match:
@@ -179,14 +178,18 @@ class TelegramNotifier:
             # Parse failure reasons
             failure_reasons = []
             failure_section = re.search(
-                r'常見失敗原因[:：]\s*(.+?)(?=本次評估|$)',
+                r'常見失敗原因[:：]\s*(.+?)' + next_sections,
                 ai_text_clean,
                 re.DOTALL
             )
             if failure_section:
-                failure_text = failure_section.group(1)
+                failure_text = failure_section.group(1).strip()
                 failure_items = re.findall(r'(?:[-•\d]+\.?)\s*(.+?)(?=\n|$)', failure_text)
                 failure_reasons = [f.strip() for f in failure_items if f.strip()]
+                
+                # Fallback: if no bullet points found but there is text, use it as a single item
+                if not failure_reasons and failure_text:
+                    failure_reasons = [failure_text]
             data['failure_reasons'] = failure_reasons
             
             # Parse current assessment
@@ -199,13 +202,6 @@ class TelegramNotifier:
             special_risk_match = re.search(r'特殊風險[:：]\s*(.+?)(?=\n|成功機率|$)', ai_text_clean)
             if special_risk_match:
                 assessment['special_risk'] = special_risk_match.group(1).strip()
-            
-            success_prob_match = re.search(r'成功機率[:：]\s*([\d.]+)[-~]?([\d.]+)?%', ai_text_clean)
-            if success_prob_match:
-                prob_min = float(success_prob_match.group(1))
-                prob_max = float(success_prob_match.group(2)) if success_prob_match.group(2) else prob_min
-                assessment['success_probability_min'] = prob_min
-                assessment['success_probability_max'] = prob_max
             
             if assessment:
                 data['current_assessment'] = assessment
@@ -291,15 +287,9 @@ class TelegramNotifier:
             message += "━━━━━━━━━━━━━━━━\n"
             
             # Pattern + Confidence (one line)
-            win_rate_text = ""
-            if typical_perf.get('win_rate_min'):
-                win_min = typical_perf['win_rate_min']
-                win_max = typical_perf['win_rate_max']
-                win_rate_text = f" | 勝率: {win_min:.0f}-{win_max:.0f}%"
-            
             if pattern_type:
                 message += f"📊 設定: {html.escape(pattern_type)}\n"
-            message += f"✨ 信心: {confidence_score}/10{win_rate_text}\n\n"
+            message += f"✨ 信心: {confidence_score}/10\n\n"
             
             # Why? (1-2 sentences max)
             if key_factors:
@@ -400,21 +390,6 @@ class TelegramNotifier:
         if typical_perf:
             text += "<b>典型表現</b>\n"
             
-            if 'win_rate_min' in typical_perf:
-                win_min = typical_perf['win_rate_min']
-                win_max = typical_perf['win_rate_max']
-                avg_win = (win_min + win_max) / 2
-                
-                # Win rate emoji
-                if avg_win >= 70:
-                    win_emoji = "🟢"
-                elif avg_win >= 55:
-                    win_emoji = "🟡"
-                else:
-                    win_emoji = "🔴"
-                
-                text += f"{win_emoji} 勝率: {win_min:.0f}-{win_max:.0f}%\n"
-            
             if 'holding_days_min' in typical_perf:
                 text += f"⏱ 持有: {typical_perf['holding_days_min']}-{typical_perf['holding_days_max']}天\n"
             
@@ -439,14 +414,6 @@ class TelegramNotifier:
             
             if 'vs_typical' in current_assessment:
                 text += f"對比: {html.escape(current_assessment['vs_typical'])}\n"
-            
-            if 'success_probability_min' in current_assessment:
-                prob_min = current_assessment['success_probability_min']
-                prob_max = current_assessment['success_probability_max']
-                if prob_min == prob_max:
-                    text += f"機率: {prob_min:.0f}%\n"
-                else:
-                    text += f"機率: {prob_min:.0f}-{prob_max:.0f}%\n"
             
             if 'special_risk' in current_assessment:
                 text += f"⚠️ {html.escape(current_assessment['special_risk'])}\n"
@@ -480,34 +447,7 @@ if __name__ == "__main__":
         
         # Test signal
         test_sentiment = {
-            'ai_advice_text': """訊號: BUY
-強度: 5
-信心評分: 9/10
-入場: 77500-78000
-目標: 80500 (+3.2%)
-停損: 76800 (-2.1%)
-預期時間: 3-7天達標
-風報比: 1:1.5
-理由: RSI極度超賣形成背離，恐懼指數極端恐慌，ETF大量流入
-倉位: 30%分3批進場，第一批當前價位，第二批-1.5%加碼
-風險: 跌破76500確認空頭延續
-
-設定類型分析:
-類型: 極度超賣反彈
-模式特徵:
-- RSI <25 且形成背離
-- 恐懼指數 <20 極端恐慌
-- 機構資金逆向流入
-典型表現:
-- 勝率範圍: 65-75%
-- 平均持有: 3-7天
-- 常見回撤: -2% to -4%
-- 最佳進場時機: 恐慌最高點，成交量萎縮後放大
-- 常見失敗原因: 1. 恐慌未結束，繼續下探 2. 反彈無量，誘多陷阱
-本次評估:
-- 與典型案例相比: 更強 (機構ETF流入$320M)
-- 特殊風險: 若跌破76500，恐慌加劇
-- 成功機率: 70-80%""",
+            'ai_advice_text': """訊號: HOLD\n強度: 2\n信心評分: 4\n入場: N/A\n目標: N/A\n停損: N/A\n風報比: N/A\n理由: 技術指標（RSI、MACD、OBV）普遍偏空，但ETF資金流入顯示機構看多。新聞提及宏觀壓力與槓桿解除，加劇賣壓。情緒指標為恐懼，但缺乏明確反彈訊號，多空比中性，故暫時觀望。\n倉位: 0%\n風險: 價格跌破 $68,000 情境。\n設定類型分析:\n類型: 無明確設定\n模式特徵:\n- 缺乏明確的技術或情緒訊號指引。\n- 市場處於觀望或不確定階段。\n- 交易者傾向於等待更清晰的入場點。\n典型表現:\n- 平均持有: 1-3天\n- 常見回撤: -3% 至 -5%\n- 最佳進場時機: 當技術指標出現底部背離，且情緒指標轉為貪婪時。\n- 常見失敗原因: 過早進場，未能有效突破關鍵阻力位。\n本次評估:\n- 與典型案例相比: 較弱\n- 特殊風險: 宏觀經濟壓力持續，可能導致進一步的槓桿解除和價格下跌。\n""",
             'fear_greed_value': 17,
             'fear_greed_class': 'Extreme Fear',
             'institutional_summary': {

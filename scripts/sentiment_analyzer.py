@@ -46,7 +46,7 @@ class SentimentAnalyzer:
                         model_name="gemini-2.5-flash-lite",
                         generation_config={
                             "temperature": 0.3,
-                            "max_output_tokens": 2048,
+                            "max_output_tokens": 3072,
                             "top_p": 0.95,
                             "top_k": 40
                         }
@@ -209,13 +209,15 @@ class SentimentAnalyzer:
                 news_context = f"Recent News: {' | '.join(headlines)}"
             # Updated prompt with new format
             prompt = f"""You are a professional crypto quant analyst who combines technical indicators, sentiment, and news to make risk-controlled trading decisions.
-            BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str} {institutional_prompt}
-            {news_context}
+BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str}
+{institutional_prompt}
+{news_context}
+Analysis instructions: Analyze the data objectively. Acknowledge when signals conflict. If conviction is low (<5), recommend HOLD instead of forcing a trade. Be honest about uncertainty - it's better than false confidence.
 Output format (exact):
 訊號: BUY/SELL/HOLD
 強度: 1-5
-信心評分: 1-10(1=隨機 5=勉強 8=高確定 10=極罕見機會)
-入場: 低點-高點
+信心評分: 1-10(1=訊號矛盾/數據不足 5=中等確定性 8=多指標一致 10=極端罕見且明確)
+入場: $低點 - $高點 (分批進場區間)
 目標: 價格 (+漲幅%)
 停損: 價格 (-跌幅%)
 風報比: 1:X.X
@@ -223,19 +225,17 @@ Output format (exact):
 倉位: 建議%+分批策略
 風險: 價格跌破XX情境
 設定類型分析:
-類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號]
+類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號/無明確設定]
 模式特徵: [此類設定的3個關鍵特徵]
 典型表現: 
-  - 勝率範圍: XX-XX%
-  - 平均持有: X-Y天
-  - 常見回撤: -X%
-  - 最佳進場時機: [具體描述]
-  - 常見失敗原因: [1-2個陷阱]
+- 平均持有: X-Y天
+- 常見回撤: -X%
+- 最佳進場時機: [具體描述]
+- 常見失敗原因: [1-2個陷阱]
 本次評估:
-  - 與典型案例相比: [更強/相當/較弱]
-  - 特殊風險: [本次獨特風險點]
-  - 成功機率: [基於上述分析的評估]
-直接輸出，不要JSON，不要編造具體日期。
+- 與典型案例相比: [更強/相當/較弱]
+- 特殊風險: [本次獨特風險點]
+直接輸出，不要JSON。
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
