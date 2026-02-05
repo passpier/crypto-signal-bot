@@ -46,7 +46,7 @@ class SentimentAnalyzer:
                         model_name="gemini-2.5-flash-lite",
                         generation_config={
                             "temperature": 0.3,
-                            "max_output_tokens": 3072,
+                            "max_output_tokens": 2048,
                             "top_p": 0.95,
                             "top_k": 40
                         }
@@ -215,15 +215,15 @@ BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} M
 Analysis instructions: Analyze the data objectively. Acknowledge when signals conflict. If conviction is low (<5), recommend HOLD instead of forcing a trade. Be honest about uncertainty - it's better than false confidence.
 Output format (exact):
 訊號: BUY/SELL/HOLD
-強度: 1-5
-信心評分: 1-10(1=訊號矛盾/數據不足 5=中等確定性 8=多指標一致 10=極端罕見且明確)
+強度: 1-5(1=不建議交易 2=次佳設定，訊號不清 3=標準設定，可接受 4=良好設定，多指標支持 5=優質設定，罕見機會)
+信心評分: 1-10(1-2=訊號矛盾/數據不足 3-4=低確定性，衝突多 5-6=中等確定性 7-8=高確定性，多指標一致 9-10=極端罕見且明確)
 入場: $低點 - $高點 (分批進場區間)
 目標: 價格 (+漲幅%)
 停損: 價格 (-跌幅%)
 風報比: 1:X.X
 理由: 技術+情緒+機構+新聞各1點，120字內
-倉位: 建議%+分批策略
-風險: 價格跌破XX情境
+倉位: 建議總資金%+分批策略
+風險: 若跌破$XX,XXX則停損離場；若[具體事件]發生則重新評估
 設定類型分析:
 類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號/無明確設定]
 模式特徵: [此類設定的3個關鍵特徵]

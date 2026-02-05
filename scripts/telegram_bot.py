@@ -233,6 +233,7 @@ class TelegramNotifier:
             entry_range = ai_data.get('entry_range', {})
             target_price = ai_data.get('target_price', [])
             stop_loss = ai_data.get('stop_loss_price', {})
+            risk_reward_ratio = ai_data.get('risk_reward_ratio', 0)
             
             pattern_type = ai_data.get('pattern_type', '')
             typical_perf = ai_data.get('typical_performance', {})
@@ -252,37 +253,29 @@ class TelegramNotifier:
             message = f"{emoji} <b>BTC {action_text}訊號</b> (強度 {signal_strength}/5) {confidence_emoji}\n\n"
             
             # Price info (compact)
-            message += f"💰 現價: ${current_price:,.0f}\n"
+            message += f"現價: ${current_price:,.0f}\n"
             
             if entry_range:
                 entry_low = entry_range.get('low', 0)
                 entry_high = entry_range.get('high', 0)
                 if entry_low and entry_high:
-                    message += f"📍 入場: ${entry_low:,.0f}-${entry_high:,.0f}\n"
+                    message += f"入場: ${entry_low:,.0f}-${entry_high:,.0f}\n"
             
             if target_price and len(target_price) > 0:
                 target = target_price[0]
                 target_price_value = target.get('price', 0)
                 target_pct = target.get('percentage', 0)
                 if target_price_value > 0:
-                    message += f"🎯 目標: ${target_price_value:,.0f} (+{target_pct:.1f}%)\n"
+                    message += f"目標: ${target_price_value:,.0f} (+{target_pct:.1f}%)\n"
             
             if stop_loss:
                 stop_price = stop_loss.get('price', 0)
                 stop_pct = stop_loss.get('percentage', 0)
                 if stop_price > 0:
-                    message += f"🛡 停損: ${stop_price:,.0f} (-{stop_pct:.1f}%)\n"
+                    message += f"停損: ${stop_price:,.0f} (-{stop_pct:.1f}%)\n"
             
-            # Holding period
-            holding = ai_data.get('expected_holding_days', {})
-            if holding:
-                min_days = holding.get('min', 0)
-                max_days = holding.get('max', 0)
-                if min_days and max_days:
-                    if min_days == max_days:
-                        message += f"⏱ 持有: {min_days}天\n"
-                    else:
-                        message += f"⏱ 持有: {min_days}-{max_days}天\n"
+            if risk_reward_ratio:
+                message += f"風報比: 1:{risk_reward_ratio:.1f}\n"
             
             message += "━━━━━━━━━━━━━━━━\n"
             
