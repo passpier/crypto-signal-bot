@@ -46,7 +46,7 @@ class SentimentAnalyzer:
                         model_name="gemini-2.5-flash-lite",
                         generation_config={
                             "temperature": 0.3,
-                            "max_output_tokens": 2048,
+                            "max_output_tokens": 5000,
                             "top_p": 0.95,
                             "top_k": 40
                         }
@@ -180,13 +180,25 @@ class SentimentAnalyzer:
             vol_str = f"{tech_volume_change:+.1f}%"
 
             institutional_prompt = ""
+            data_warnings = []
+            missing = []
             etf_net = None
-            liq_total = None
             lsr_ratio = None
+            if not institutional_data:
+                missing = ['ETF flows', 'Long/Short Ratio', 'Funding Rate']
+                warning_text = "機構即時數據缺失: " + ", ".join(missing)
+                data_warnings.append(warning_text)
+                logger.warning(warning_text)
             if institutional_data:
                 try:
+                    realtime_status = institutional_data.get('realtime_status', {}) if isinstance(institutional_data, dict) else {}
+                    missing = realtime_status.get('missing', []) if isinstance(realtime_status, dict) else []
+                    if missing:
+                        warning_text = f"機構即時數據缺失: {', '.join(missing)}"
+                        data_warnings.append(warning_text)
+                        logger.warning(warning_text)
+
                     etf_net = institutional_data.get('etf_flows', {}).get('net_flow', 0) / 1e6
-                    liq_total = institutional_data.get('liquidations', {}).get('total_liquidation', 0) / 1e6
                     lsr_ratio = institutional_data.get('long_short_ratio', {}).get('ratio', 1.0)
                     funding_pct = institutional_data.get('funding_rate', {}).get('rate_pct', 0)
                     
@@ -194,9 +206,10 @@ class SentimentAnalyzer:
                     lsr_signal = "shorts" if lsr_ratio < 0.9 else "longs" if lsr_ratio > 1.1 else "balanced"
                     funding_signal = "overheat" if funding_pct > 0.1 else "oversold" if funding_pct < -0.05 else "neutral"
 
+                    warnings_line = f"\nData Warning: {data_warnings[0]}" if data_warnings else ""
                     institutional_prompt = f"""
-                    Inst Data:
-                    ETF:${etf_net:.0f}M({etf_signal}) Liq:${liq_total:.0f}M L/S:{lsr_ratio:.2f}({lsr_signal}) FR:{funding_pct:.3f}%({funding_signal})
+Inst Data:
+ETF:${etf_net:.0f}M({etf_signal}) L/S:{lsr_ratio:.2f}({lsr_signal}) FR:{funding_pct:.3f}%({funding_signal}){warnings_line}
                     """
                 except Exception as e:
                     logger.warning(f"⚠ Failed to format institutional data: {e}")
@@ -205,14 +218,18 @@ class SentimentAnalyzer:
 
             news_context = ""
             if news and len(news) > 0:
-                headlines = [article['title'] for article in news[:3]]
-                news_context = f"Recent News: {' | '.join(headlines)}"
-            # Updated prompt with new format
+                news_items = []
+                for article in news[:3]:
+                    title = article.get('title', 'No Title')
+                    body = article.get('body', 'No Body')[:1000]
+                    published = article.get('published', 'Unknown Time')
+                    news_items.append(f"Title: {title}\nTime: {published}\nContent: {body}\n---")
+                news_context = "Recent News:\n" + "\n".join(news_items)
             prompt = f"""You are a professional crypto quant analyst who combines technical indicators, sentiment, and news to make risk-controlled trading decisions.
 BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str}
 {institutional_prompt}
 {news_context}
-Analysis instructions: Analyze the data objectively. Acknowledge when signals conflict. If conviction is low (<5), recommend HOLD instead of forcing a trade. Be honest about uncertainty - it's better than false confidence.
+Analysis instructions: Analyze the data objectively. Acknowledge when signals conflict. Never fabricate levels, targets, percentages, or ratios. If a required value cannot be justified, output "N/A". If data is insufficient or conviction is low, recommend HOLD instead of forcing a trade. 
 Output format (exact):
 訊號: BUY/SELL/HOLD
 強度: 1-5(1=不建議交易 2=次佳設定，訊號不清 3=標準設定，可接受 4=良好設定，多指標支持 5=優質設定，罕見機會)
@@ -221,21 +238,15 @@ Output format (exact):
 目標: 價格 (+漲幅%)
 停損: 價格 (-跌幅%)
 風報比: 1:X.X
-理由: 技術+情緒+機構+新聞各1點，120字內
+理由: 技術面／情緒面／機構面／新聞面各1點，並總結，150字內
 倉位: 建議總資金%+分批策略
-風險: 若跌破$XX,XXX則停損離場；若[具體事件]發生則重新評估
+風險: 風險管理建議
 設定類型分析:
 類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號/無明確設定]
 模式特徵: [此類設定的3個關鍵特徵]
-典型表現: 
-- 平均持有: X-Y天
-- 常見回撤: -X%
-- 最佳進場時機: [具體描述]
-- 常見失敗原因: [1-2個陷阱]
 本次評估:
-- 與典型案例相比: [更強/相當/較弱]
 - 特殊風險: [本次獨特風險點]
-直接輸出，不要JSON。
+以上各項輸出說明和數據需邏輯一致，不要JSON。
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
@@ -255,9 +266,10 @@ Output format (exact):
                 'ai_advice_text': ai_text,  # Store cleaned AI output for Telegram
                 'fear_greed_value': fear_greed_value,
                 'fear_greed_class': fear_greed_class,
+                'data_warnings': data_warnings,
+                'institutional_missing': missing if institutional_data else [],
                 'institutional_summary': {
                     'etf_net_m': etf_net if institutional_data else None,
-                    'liq_total_m': liq_total if institutional_data else None,
                     'lsr_ratio': lsr_ratio if institutional_data else None
                 } if institutional_data else None
             }
@@ -379,4 +391,3 @@ if __name__ == "__main__":
         print(f"\nTop Headlines:")
         for headline in sentiment['news_headlines']:
             print(f"  • {headline[:60]}...")
-

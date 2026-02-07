@@ -116,7 +116,7 @@ class TelegramNotifier:
             ai_text_clean = ai_text.replace('\\n', '\n')
             
             # Define common sections
-            next_sections = r'(?=\n?倉位|\n?風險|\n?設定類型分析|\n?類型|\n?模式特徵|\n?典型表現|\n?常見失敗|\n?本次評估|$)'
+            next_sections = r'(?=\n?倉位|\n?風險|\n?設定類型分析|\n?類型|\n?模式特徵|\n?本次評估|$)'
             
             # Parse reason
             reason_match = re.search(r'理由[:：]\s*(.+?)' + next_sections, ai_text_clean, re.DOTALL)
@@ -141,7 +141,7 @@ class TelegramNotifier:
             # Parse pattern characteristics
             characteristics = []
             char_section = re.search(
-                r'模式特徵[:：]\s*(.+?)(?=典型表現|本次評估|$)',
+                r'模式特徵[:：]\s*(.+?)(?=本次評估|$)',
                 ai_text_clean,
                 re.DOTALL
             )
@@ -150,47 +150,15 @@ class TelegramNotifier:
                 char_items = re.findall(r'(?:[-•\d]+\.?)\s*(.+?)(?=\n|$)', char_text)
                 characteristics = [c.strip() for c in char_items if c.strip()]
                 
-                # Fallback: if no bullet points found but there is text, use it as a single item
+                # Fallback: handle inline numbered list like "1. ... 2. ... 3. ..."
                 if not characteristics and char_text:
-                    characteristics = [char_text]
+                    inline_parts = re.split(r'\s*(?:\d+)\.\s*', char_text)
+                    inline_parts = [p.strip() for p in inline_parts if p.strip()]
+                    if inline_parts:
+                        characteristics = inline_parts
+                    else:
+                        characteristics = [char_text]
             data['pattern_characteristics'] = characteristics
-            
-            # Parse typical performance
-            typical_perf = {}
-            
-            holding_perf_match = re.search(r'平均持有[:：]\s*(\d+)[-~](\d+)天', ai_text_clean)
-            if holding_perf_match:
-                typical_perf['holding_days_min'] = int(holding_perf_match.group(1))
-                typical_perf['holding_days_max'] = int(holding_perf_match.group(2))
-            
-            drawdown_match = re.search(r'常見回撤[:：]\s*-?([\d.]+)%?\s*(?:to|-|~)\s*-?([\d.]+)%', ai_text_clean)
-            if drawdown_match:
-                typical_perf['drawdown_min'] = float(drawdown_match.group(1))
-                typical_perf['drawdown_max'] = float(drawdown_match.group(2))
-            
-            entry_timing_match = re.search(r'最佳進場時機[:：]\s*(.+?)(?=\n|常見失敗)', ai_text_clean)
-            if entry_timing_match:
-                typical_perf['best_entry_timing'] = entry_timing_match.group(1).strip()
-            
-            if typical_perf:
-                data['typical_performance'] = typical_perf
-            
-            # Parse failure reasons
-            failure_reasons = []
-            failure_section = re.search(
-                r'常見失敗原因[:：]\s*(.+?)' + next_sections,
-                ai_text_clean,
-                re.DOTALL
-            )
-            if failure_section:
-                failure_text = failure_section.group(1).strip()
-                failure_items = re.findall(r'(?:[-•\d]+\.?)\s*(.+?)(?=\n|$)', failure_text)
-                failure_reasons = [f.strip() for f in failure_items if f.strip()]
-                
-                # Fallback: if no bullet points found but there is text, use it as a single item
-                if not failure_reasons and failure_text:
-                    failure_reasons = [failure_text]
-            data['failure_reasons'] = failure_reasons
             
             # Parse current assessment
             assessment = {}
@@ -236,7 +204,6 @@ class TelegramNotifier:
             risk_reward_ratio = ai_data.get('risk_reward_ratio', 0)
             
             pattern_type = ai_data.get('pattern_type', '')
-            typical_perf = ai_data.get('typical_performance', {})
             key_factors = ai_data.get('key_factors', [])
             risk_management = ai_data.get('risk_management', '')
             main_risk = ai_data.get('main_risk', '')
@@ -333,9 +300,9 @@ class TelegramNotifier:
         """Build detailed analysis text for spoiler section."""
         # Extract data
         pattern_chars = ai_data.get('pattern_characteristics', [])
-        typical_perf = ai_data.get('typical_performance', {})
-        failure_reasons = ai_data.get('failure_reasons', [])
         current_assessment = ai_data.get('current_assessment', {})
+        news_headlines = sentiment.get('news_headlines', []) if sentiment else []
+        data_warnings = sentiment.get('data_warnings', []) if sentiment else []
         
         rsi = signal['indicators'].get('rsi') if signal.get('indicators') else None
         macd = signal['indicators'].get('macd') if signal.get('indicators') else None
@@ -369,36 +336,24 @@ class TelegramNotifier:
                 text += f"ETF 淨流: ${etf_net:.0f}M\n"
             if lsr_ratio:
                 text += f"多空比: {lsr_ratio:.2f}\n"
+        if data_warnings:
+            warning_line = html.escape(data_warnings[0])
+            text += f"\n{warning_line}\n"
         
         text += "\n━━━━━━━━━━━━━━━━\n\n"
+
+        # News headlines
+        if news_headlines:
+            text += "<b>📰 最新新聞</b>\n"
+            for title in news_headlines[:3]:
+                text += f"• {html.escape(title)}\n"
+            text += "\n"
         
         # Pattern characteristics
         if pattern_chars:
             text += "<b>模式特徵</b>\n"
             for char in pattern_chars:
                 text += f"• {html.escape(char)}\n"
-            text += "\n"
-        
-        # Typical performance
-        if typical_perf:
-            text += "<b>典型表現</b>\n"
-            
-            if 'holding_days_min' in typical_perf:
-                text += f"⏱ 持有: {typical_perf['holding_days_min']}-{typical_perf['holding_days_max']}天\n"
-            
-            if 'drawdown_min' in typical_perf:
-                text += f"📉 回撤: -{typical_perf['drawdown_min']:.1f}% ~ -{typical_perf['drawdown_max']:.1f}%\n"
-            
-            if 'best_entry_timing' in typical_perf:
-                text += f"✅ 進場: {html.escape(typical_perf['best_entry_timing'])}\n"
-            
-            text += "\n"
-        
-        # Common failure scenarios
-        if failure_reasons:
-            text += "<b>⚠️ 常見陷阱</b>\n"
-            for i, reason in enumerate(failure_reasons, 1):
-                text += f"{i}. {html.escape(reason)}\n"
             text += "\n"
         
         # Current setup assessment
@@ -440,7 +395,7 @@ if __name__ == "__main__":
         
         # Test signal
         test_sentiment = {
-            'ai_advice_text': """訊號: HOLD\n強度: 2\n信心評分: 4\n入場: N/A\n目標: N/A\n停損: N/A\n風報比: N/A\n理由: 技術指標（RSI、MACD、OBV）普遍偏空，但ETF資金流入顯示機構看多。新聞提及宏觀壓力與槓桿解除，加劇賣壓。情緒指標為恐懼，但缺乏明確反彈訊號，多空比中性，故暫時觀望。\n倉位: 0%\n風險: 價格跌破 $68,000 情境。\n設定類型分析:\n類型: 無明確設定\n模式特徵:\n- 缺乏明確的技術或情緒訊號指引。\n- 市場處於觀望或不確定階段。\n- 交易者傾向於等待更清晰的入場點。\n典型表現:\n- 平均持有: 1-3天\n- 常見回撤: -3% 至 -5%\n- 最佳進場時機: 當技術指標出現底部背離，且情緒指標轉為貪婪時。\n- 常見失敗原因: 過早進場，未能有效突破關鍵阻力位。\n本次評估:\n- 與典型案例相比: 較弱\n- 特殊風險: 宏觀經濟壓力持續，可能導致進一步的槓桿解除和價格下跌。\n""",
+            'ai_advice_text': """訊號: HOLD\n強度: 2\n信心評分: 4\n入場: N/A\n目標: N/A\n停損: N/A\n風報比: N/A\n理由: 技術指標（RSI、MACD、OBV）普遍偏空，但ETF資金流入顯示機構看多。新聞提及宏觀壓力與槓桿解除，加劇賣壓。情緒指標為恐懼，但缺乏明確反彈訊號，多空比中性，故暫時觀望。\n倉位: 0%\n風險: 價格跌破 $68,000 情境。\n設定類型分析:\n類型: 無明確設定\n模式特徵:\n- 缺乏明確的技術或情緒訊號指引。\n- 市場處於觀望或不確定階段。\n- 交易者傾向於等待更清晰的入場點。\n本次評估:\n- 與典型案例相比: 較弱\n- 特殊風險: 宏觀經濟壓力持續，可能導致進一步的槓桿解除和價格下跌。\n""",
             'fear_greed_value': 17,
             'fear_greed_class': 'Extreme Fear',
             'institutional_summary': {

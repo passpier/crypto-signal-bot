@@ -6,7 +6,7 @@ An automated cryptocurrency trading signal bot that combines **technical analysi
 
 ### Core Functionality
 - **Technical Analysis**: RSI, MACD, EMA, Bollinger Bands, OBV with intelligent trend detection
-- 🏦 **Institutional Data**: ETF flows, liquidations, long/short ratio, funding rates (Coinglass + Binance)
+- 🏦 **Institutional Data**: ETF flows, long/short ratio, funding rates (Coinglass + Binance)
 - 🧠 **Sentiment Analysis**: Fear & Greed Index + Crypto News aggregation
 - 🤖 **AI Synthesis**: Google Gemini 2.5 Flash Lite combines all data into actionable insights
 - 🎯 **Combined Strategy**: Technical + Institutional + Sentiment = High-conviction signals
@@ -34,9 +34,9 @@ An automated cryptocurrency trading signal bot that combines **technical analysi
 │  │   ANALYSIS   │   │     DATA          │   │ (Fear\&Greed + News)    │    │
 │  │              │   │                   │   └─────────────────────────┘    │
 │  │ -  RSI       │   │ -  ETF Net Flow   │              │                   │
-│  │ -  MACD      │   │ -  Liquidations   │              ▼                   │
-│  │ -  EMA 12/50 │   │ -  Long/Short     │   ┌─────────────────────────┐    │
-│  │ -  Bollinger │   │ -  Funding Rate   │   │      GEMINI AI          │    │
+│  │ -  MACD      │   │ -  Long/Short     │              ▼                   │
+│  │ -  EMA 12/50 │   │ -  Funding Rate   │   ┌─────────────────────────┐    │
+│  │ -  Bollinger │   │                   │   │      GEMINI AI          │    │
 │  │ -  OBV       │   └─────────┬─────────┘   │ (Synthesize all data)   │    │
 │  └──────┬───────┘             │             └─────────────────────────┘    │
 │         │                     │                        │                   │
@@ -75,7 +75,6 @@ An automated cryptocurrency trading signal bot that combines **technical analysi
 #### Layer 2: Institutional Data (Who)
 **Reveals WHO is moving the market (smart money)**
 - **ETF Flows**: Real institutional buy/sell pressure (e.g., -$494M = bearish)
-- **Liquidations**: Forced closures clearing weak hands (often precedes reversals)
 - **Long/Short Ratio**: Retail positioning (contrarian indicator when extreme)
 - **Funding Rate**: Cost of holding perpetual futures (>0.1% = overheated)
 

@@ -224,7 +224,6 @@ def main():
             },
             'institutional': {
                 'etf_net_flow': institutional_data['etf_flows']['net_flow'] if institutional_data and institutional_data.get('etf_flows') else None,
-                'liquidations_24h': institutional_data['liquidations']['total_liquidation'] if institutional_data and institutional_data.get('liquidations') else None,
                 'long_short_ratio': institutional_data['long_short_ratio']['ratio'] if institutional_data and institutional_data.get('long_short_ratio') else None
             } if institutional_data else None,
             'sentiment': {

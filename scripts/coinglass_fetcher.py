@@ -85,69 +85,6 @@ class CoinglassFetcher:
             return None
 
     
-    def fetch_liquidations(self, symbol: str = 'BTC', interval: str = '24h') -> Optional[Dict]:
-        """
-        Liquidations - use Binance public liquidation orders (recent).
-        
-        Note: Binance limits allForceOrders to last 7 days, not real-time aggregates.
-        Alternative: Could scrape Coinglass liquidation heatmap page.
-        """
-        try:
-            # === FIX: Binance requires startTime for allForceOrders ===
-            from datetime import timedelta
-            end_time = int(datetime.now().timestamp() * 1000)
-            start_time = end_time - (24 * 60 * 60 * 1000)  # 24h ago
-            
-            url = 'https://fapi.binance.com/fapi/v1/allForceOrders'
-            params = {
-                'symbol': f'{symbol}USDT',
-                'startTime': start_time,
-                'endTime': end_time
-            }
-            resp = self.session.get(url, params=params, timeout=10)
-            
-            # If 400, try without time filter (fallback)
-            if resp.status_code == 400:
-                logger.warning("Binance liquidations unavailable, using estimate")
-                return {
-                    'total_liquidation': 0,
-                    'long_liquidation': 0,
-                    'short_liquidation': 0,
-                    'interval': interval,
-                    'source': 'Binance (estimated)',
-                    'note': 'Real-time data unavailable'
-                }
-            
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if not data:
-                return None
-            
-            # Calculate 24h liquidations
-            total_liq = sum(float(o['price']) * float(o['origQty']) for o in data)
-            long_liq = sum(float(o['price']) * float(o['origQty']) 
-                          for o in data if o['side'] == 'SELL')
-            
-            return {
-                'total_liquidation': total_liq,
-                'long_liquidation': long_liq,
-                'short_liquidation': total_liq - long_liq,
-                'interval': interval,
-                'source': 'Binance'
-            }
-            
-        except Exception as e:
-            logger.warning(f"Failed to fetch liquidations: {e}")
-            # Return safe fallback
-            return {
-                'total_liquidation': 0,
-                'long_liquidation': 0,
-                'short_liquidation': 0,
-                'interval': interval,
-                'source': 'fallback'
-            }
-    
     def fetch_long_short_ratio(self, symbol: str = 'BTC') -> Optional[Dict]:
         """
         Long/Short ratio - use Binance Futures API (free).
@@ -212,21 +149,36 @@ class CoinglassFetcher:
         
         data = {
             'etf_flows': self.fetch_etf_flows(symbol),
-            'liquidations': self.fetch_liquidations(symbol, interval='24h'),
             'long_short_ratio': self.fetch_long_short_ratio(symbol),
             'funding_rate': self.fetch_funding_rate(symbol),
             'timestamp': datetime.now().isoformat()
+        }
+
+        # Assess real-time data availability
+        missing = []
+        if not data.get('etf_flows'):
+            missing.append('ETF flows')
+
+        if not data.get('long_short_ratio'):
+            missing.append('Long/Short Ratio')
+
+        if not data.get('funding_rate'):
+            missing.append('Funding Rate')
+
+        data['realtime_status'] = {
+            'ok': len(missing) == 0,
+            'missing': missing
         }
         
         # Log results
         if data['etf_flows']:
             logger.info(f"✓ ETF Net Flow: ${data['etf_flows']['net_flow']/1e6:.1f}M")
-        if data['liquidations']:
-            logger.info(f"✓ 24h Liquidations: ${data['liquidations']['total_liquidation']/1e6:.1f}M")
         if data['long_short_ratio']:
             logger.info(f"✓ Long/Short Ratio: {data['long_short_ratio']['ratio']:.2f}")
         if data['funding_rate']:
             logger.info(f"✓ Funding Rate: {data['funding_rate']['rate_pct']:.3f}%")
+        if not data['realtime_status']['ok']:
+            logger.warning(f"⚠ Realtime institutional data missing: {', '.join(missing)}")
         
         return data
 
