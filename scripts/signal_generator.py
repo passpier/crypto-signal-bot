@@ -75,11 +75,53 @@ class SignalGenerator:
         bb_std_val = df['close'].rolling(window=bb_period).std()
         df['bb_upper'] = df['bb_middle'] + (bb_std_val * bb_std)
         df['bb_lower'] = df['bb_middle'] - (bb_std_val * bb_std)
-        
+
+        # ADX (Average Directional Index)
+        adx_period = self.config['indicators'].get('adx_period', 14)
+        high = df['high']
+        low = df['low']
+        close = df['close']
+
+        up_move = high.diff()
+        down_move = -low.diff()
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        tr = pd.concat([
+            (high - low),
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs()
+        ], axis=1).max(axis=1)
+
+        atr = tr.rolling(window=adx_period, min_periods=adx_period).mean()
+        plus_dm_series = pd.Series(plus_dm, index=df.index)
+        minus_dm_series = pd.Series(minus_dm, index=df.index)
+        plus_di = 100 * plus_dm_series.rolling(window=adx_period, min_periods=adx_period).mean() / atr
+        minus_di = 100 * minus_dm_series.rolling(window=adx_period, min_periods=adx_period).mean() / atr
+        dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di)).replace([np.inf, -np.inf], np.nan)
+        df['adx'] = dx.rolling(window=adx_period, min_periods=adx_period).mean()
+        df['plus_di'] = plus_di
+        df['minus_di'] = minus_di
+
+        # Stochastic Oscillator
+        stoch_period = self.config['indicators'].get('stoch_period', 14)
+        stoch_d_period = self.config['indicators'].get('stoch_d_period', 3)
+        low_min = df['low'].rolling(window=stoch_period, min_periods=stoch_period).min()
+        high_max = df['high'].rolling(window=stoch_period, min_periods=stoch_period).max()
+        stoch_k = 100 * (df['close'] - low_min) / (high_max - low_min)
+        df['stoch_k'] = stoch_k.replace([np.inf, -np.inf], np.nan)
+        df['stoch_d'] = df['stoch_k'].rolling(window=stoch_d_period, min_periods=stoch_d_period).mean()
+
         # OBV (On-Balance Volume)
         df['price_change'] = df['close'].diff()
         df['obv'] = (np.where(df['price_change'] > 0, df['volume'],
                              np.where(df['price_change'] < 0, -df['volume'], 0))).cumsum()
+
+        # Volume moving average (20)
+        df['volume_ma_20'] = df['volume'].rolling(window=20, min_periods=1).mean()
+
+        # Support level (rolling 20-period low)
+        df['support'] = df['low'].rolling(window=20, min_periods=1).min()
         
         # Volume change percentage (7-day average)
         df['volume_change'] = 0.0
@@ -94,6 +136,109 @@ class SignalGenerator:
             df['volume_change'] = df['volume_change'].clip(lower=-100, upper=1000)
         
         return df
+
+    def calculate_signal_strength(self, df: pd.DataFrame) -> Dict:
+        """
+        Calculate signal strength and action using a quant scoring model.
+
+        Returns:
+            Dictionary with action, strength, score, and derived flags.
+        """
+        if df is None or df.empty:
+            return {'action': 'HOLD', 'strength': 3, 'score': 0}
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else latest
+
+        ema_12 = float(latest.get('ema_12', 0) or 0)
+        ema_26 = float(latest.get('ema_26', 0) or 0)
+        macd = float(latest.get('macd', 0) or 0)
+        signal_line = float(latest.get('signal_line', 0) or 0)
+        adx = float(latest.get('adx', 0) or 0)
+        rsi = float(latest.get('rsi', 50) or 50)
+        stoch_k = float(latest.get('stoch_k', 50) or 50)
+        stoch_d = float(latest.get('stoch_d', 50) or 50)
+        obv = float(latest.get('obv', 0) or 0)
+        volume = float(latest.get('volume', 0) or 0)
+        volume_ma_20 = float(latest.get('volume_ma_20', 0) or 0)
+        support = float(latest.get('support', 0) or 0)
+        price = float(latest.get('close', 0) or 0)
+
+        score = 0.0
+
+        # 趨勢指標 (40%)
+        if ema_12 > ema_26:
+            score += 1
+        if macd > signal_line:
+            score += 1
+        if adx > 25:
+            score += 1  # 趨勢強度
+
+        # 動能指標 (30%)
+        if rsi <= 30 or rsi >= 70:
+            score += 0.5  # 極端值
+        if 40 <= rsi <= 60:
+            score += 1  # 反轉區
+        if stoch_k > stoch_d:
+            score += 0.5
+
+        # 量價指標 (20%)
+        obv_trend = 'flat'
+        if len(df) >= 7:
+            obv_prev = float(df.iloc[-7].get('obv', obv) or obv)
+            if obv > obv_prev:
+                obv_trend = 'up'
+            elif obv < obv_prev:
+                obv_trend = 'down'
+        if obv_trend == 'up':
+            score += 1
+        if volume_ma_20 > 0 and volume > volume_ma_20 * 1.5:
+            score += 0.5
+
+        # 支撐壓力 (10%)
+        near_support = False
+        bouncing = price > float(prev.get('close', price) or price)
+        if support > 0:
+            near_support = price <= support * 1.01
+        if near_support and bouncing:
+            score += 0.5
+
+        # 標準化到 1-5
+        strength = round(score / 2) + 1
+        strength = max(1, min(5, int(strength)))
+
+        # Directional bias for action
+        direction_score = 0
+        direction_score += 1 if ema_12 > ema_26 else -1
+        direction_score += 1 if macd > signal_line else -1
+        if rsi <= 30:
+            direction_score += 1
+        elif rsi >= 70:
+            direction_score -= 1
+        if stoch_k > stoch_d:
+            direction_score += 1
+        elif stoch_k < stoch_d:
+            direction_score -= 1
+        if obv_trend == 'up':
+            direction_score += 1
+        elif obv_trend == 'down':
+            direction_score -= 1
+
+        if direction_score >= 2 and strength >= 3:
+            action = 'BUY'
+        elif direction_score <= -2 and strength >= 3:
+            action = 'SELL'
+        else:
+            action = 'HOLD'
+
+        return {
+            'action': action,
+            'strength': strength,
+            'score': score,
+            'obv_trend': obv_trend,
+            'near_support': near_support,
+            'bouncing': bouncing
+        }
 
 
 # Test
@@ -123,4 +268,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         sys.exit(1)
-

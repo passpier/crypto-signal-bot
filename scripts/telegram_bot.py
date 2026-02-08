@@ -123,7 +123,7 @@ class TelegramNotifier:
             if reason_match:
                 data['key_factors'] = [reason_match.group(1).strip()]
             
-            # Parse risk management
+            # Parse position/risk management
             position_match = re.search(r'倉位[:：]\s*(.+?)' + next_sections, ai_text_clean, re.DOTALL)
             if position_match:
                 data['risk_management'] = position_match.group(1).strip()
@@ -133,12 +133,12 @@ class TelegramNotifier:
             if risk_match:
                 data['main_risk'] = risk_match.group(1).strip()
             
-            # Parse pattern type
+            # Parse pattern type (legacy)
             pattern_type_match = re.search(r'\n類型[:：]\s*(.+?)(?=\n|模式特徵|$)', ai_text_clean)
             if pattern_type_match:
                 data['pattern_type'] = pattern_type_match.group(1).strip()
             
-            # Parse pattern characteristics
+            # Parse pattern characteristics (legacy)
             characteristics = []
             char_section = re.search(
                 r'模式特徵[:：]\s*(.+?)(?=本次評估|$)',
@@ -173,6 +173,9 @@ class TelegramNotifier:
             
             if assessment:
                 data['current_assessment'] = assessment
+
+            # Keep raw text for fallback display
+            data['raw_text'] = ai_text_clean.strip()
             
             logger.info(f"Parsed {len(data)} fields from AI text (confidence: {data.get('confidence', 'N/A')})")
             return data
@@ -193,8 +196,9 @@ class TelegramNotifier:
             ai_data = self._parse_text_signal(ai_advice_text)
             
             # Extract key info
-            signal_action = ai_data.get('signal', signal.get('action', 'HOLD'))
-            signal_strength = ai_data.get('strength', signal.get('strength', 3))
+            # Always use technical signal/strength from quant model
+            signal_action = signal.get('action', ai_data.get('signal', 'HOLD'))
+            signal_strength = signal.get('strength', ai_data.get('strength', 3))
             confidence_score = ai_data.get('confidence', 5)
             
             current_price = signal.get('price', 0)
@@ -216,7 +220,7 @@ class TelegramNotifier:
             emoji = action_emoji.get(signal_action, '🟡')
             confidence_emoji = self._get_confidence_emoji(confidence_score)
             
-            # === BUILD SIMPLE MESSAGE (HTML FORMAT) ===
+            # === BUILD FULL MESSAGE (HTML FORMAT) ===
             message = f"{emoji} <b>BTC {action_text}訊號</b> (強度 {signal_strength}/5) {confidence_emoji}\n\n"
             
             # Price info (compact)
@@ -245,35 +249,32 @@ class TelegramNotifier:
                 message += f"風報比: 1:{risk_reward_ratio:.1f}\n"
             
             message += "━━━━━━━━━━━━━━━━\n"
-            
+
             # Pattern + Confidence (one line)
             if pattern_type:
                 message += f"📊 設定: {html.escape(pattern_type)}\n"
             message += f"✨ 信心: {confidence_score}/10\n\n"
-            
-            # Why? (1-2 sentences max)
+
+            # Why? (full)
             if key_factors:
                 reason = html.escape(key_factors[0])
-                message += f"💡 <b>為什麼{action_text}?</b>\n{reason}\n\n"
-            
-            # How? (Position sizing in 1 line)
+                message += f"💡 <b>理由</b>\n{reason}\n\n"
+
+            # Position sizing
             if risk_management:
-                position_brief = html.escape(risk_management.split('\n')[0])  # First line, escape
-                message += f"📋 <b>怎麼做?</b>\n{position_brief}\n\n"
-            
-            # When to exit? (Most important!)
+                position_text = html.escape(risk_management)
+                message += f"📋 <b>倉位</b>\n{position_text}\n\n"
+
+            # Main risk
             if main_risk:
-                risk_brief = html.escape(main_risk.split('\n')[0])
-                message += f"⚠️ <b>什麼情況跑?</b>\n{risk_brief}\n\n"
-            
-            message += "━━━━━━━━━━━━━━━━\n"
-            message += "👇 點擊查看完整分析\n\n"
-            
-            # === BUILD DETAILED ANALYSIS (Hidden in spoiler) ===
+                risk_text = html.escape(main_risk)
+                message += f"⚠️ <b>風險</b>\n{risk_text}\n\n"
+
+            message += "━━━━━━━━━━━━━━━━\n\n"
+
+            # === BUILD DETAILED ANALYSIS (Visible) ===
             detailed = self._build_detailed_text(ai_data, signal, sentiment)
-            
-            # Wrap in spoiler tag
-            message += f'<span class="tg-spoiler">{detailed}</span>'
+            message += detailed
             
             # === BUTTON ===
             keyboard = [[
@@ -297,7 +298,7 @@ class TelegramNotifier:
             return False
 
     def _build_detailed_text(self, ai_data: Dict, signal: Dict, sentiment: Dict) -> str:
-        """Build detailed analysis text for spoiler section."""
+        """Build detailed analysis text."""
         # Extract data
         pattern_chars = ai_data.get('pattern_characteristics', [])
         current_assessment = ai_data.get('current_assessment', {})
@@ -315,7 +316,7 @@ class TelegramNotifier:
         lsr_ratio = inst_summary.get('lsr_ratio') if inst_summary else None
         
         # Build detailed text
-        text = "<b>📊 完整技術分析</b>\n\n"
+        text = "<b>📊 完整資訊</b>\n\n"
         
         # Technical indicators
         text += "<b>技術指標</b>\n"
@@ -349,7 +350,7 @@ class TelegramNotifier:
                 text += f"• {html.escape(title)}\n"
             text += "\n"
         
-        # Pattern characteristics
+        # Pattern characteristics (legacy)
         if pattern_chars:
             text += "<b>模式特徵</b>\n"
             for char in pattern_chars:
@@ -365,6 +366,11 @@ class TelegramNotifier:
             
             if 'special_risk' in current_assessment:
                 text += f"⚠️ {html.escape(current_assessment['special_risk'])}\n"
+
+        # Raw AI text fallback (if parsing missing key fields)
+        if not ai_data.get('key_factors') and ai_data.get('raw_text'):
+            text += "\n<b>🧾 AI 原文</b>\n"
+            text += html.escape(ai_data['raw_text']) + "\n"
         
         return text
 

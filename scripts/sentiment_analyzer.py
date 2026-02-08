@@ -108,7 +108,8 @@ class SentimentAnalyzer:
         news: List[Dict],
         df_with_indicators: pd.DataFrame,
         current_price: float,
-        institutional_data: Dict
+        institutional_data: Dict,
+        tech_signal: Optional[Dict] = None
     ) -> Dict:
         """
         Use Gemini AI to synthesize all data into actionable sentiment analysis.
@@ -225,28 +226,48 @@ ETF:${etf_net:.0f}M({etf_signal}) L/S:{lsr_ratio:.2f}({lsr_signal}) FR:{funding_
                     published = article.get('published', 'Unknown Time')
                     news_items.append(f"Title: {title}\nTime: {published}\nContent: {body}\n---")
                 news_context = "Recent News:\n" + "\n".join(news_items)
+            tech_signal_action = tech_signal.get('action') if tech_signal else "N/A"
+            tech_signal_strength = tech_signal.get('strength') if tech_signal else "N/A"
+            tech_signal_score = tech_signal.get('score') if tech_signal else "N/A"
+
             prompt = f"""You are a professional crypto quant analyst who combines technical indicators, sentiment, and news to make risk-controlled trading decisions.
-BTCUSDT ${current_price:,.0f} Fear&Greed:{fear_greed_value} RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA diff:{ema_diff_pct:+.1f}% BB:{bb_position_pct:.0f}% OBV:{obv_str} Vol:{vol_str}
+
+=== Market Data ===
+BTCUSDT ${current_price:,.0f}
+Technical: RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA12 diff%:{ema_diff_pct:+.1f}% BB position:{bb_position_pct:.0f}% OBV change:{obv_str} Volume change (7d avg):{vol_str}
+Computed Technical Signal (for verification only): {tech_signal_action} | Strength:{tech_signal_strength}/5 | Score:{tech_signal_score}
+Fear&Greed:{fear_greed_value} (Class:{fear_greed_class})
 {institutional_prompt}
 {news_context}
-Analysis instructions: Analyze the data objectively. Acknowledge when signals conflict. Never fabricate levels, targets, percentages, or ratios. If a required value cannot be justified, output "N/A". If data is insufficient or conviction is low, recommend HOLD instead of forcing a trade. 
-Output format (exact):
-訊號: BUY/SELL/HOLD
-強度: 1-5(1=不建議交易 2=次佳設定，訊號不清 3=標準設定，可接受 4=良好設定，多指標支持 5=優質設定，罕見機會)
-信心評分: 1-10(1-2=訊號矛盾/數據不足 3-4=低確定性，衝突多 5-6=中等確定性 7-8=高確定性，多指標一致 9-10=極端罕見且明確)
-入場: $低點 - $高點 (分批進場區間)
-目標: 價格 (+漲幅%)
-停損: 價格 (-跌幅%)
-風報比: 1:X.X
-理由: 技術面／情緒面／機構面／新聞面各1點，並總結，150字內
+
+=== Analysis Rules ===
+Analyze the data objectively. Acknowledge when signals conflict. Never fabricate levels, targets, percentages, or ratios. If a required value cannot be justified, output "N/A".
+
+[執行信心評分 1-10]綜合確定性
+計算公式：各維度評分加權平均
+1.技術面(40%): 訊號強度 × 2 (1-5 映射到 2-10)
+2.基本面(30%): 機構動向評分 0-10
+ - ETF大幅流入(>$500M)=10 | 流入($100-500M)=7 | 中性=5 | 流出=3 | 大幅流出(<-$500M)=0
+ - Long/Short比率: >3=8 | 2-3=6 | 1-2=4 | <1=2
+3.情緒面(20%): Fear&Greed指數調整
+ - 極度恐慌(<10)且技術反彈=8 | 恐慌(10-25)=6 | 中性(25-75)=5 | 貪婪(75-90)=4 | 極度貪婪(>90)=2
+4.風險面(10%): 新聞/監管風險
+ - 無重大風險=10 | 潛在風險=7 | 已知風險=5 | 重大利空=2
+
+最終分數 = (技術×0.4 + 基本面×0.3 + 情緒×0.2 + 風險×0.1)
+映射到行動: 1-2=HOLD | 3-4=輕倉5-15% | 5-6=標準15-25% | 7-8=重倉25-40% | 9-10=滿倉40-60%
+
+輸出要求所有數據邏輯一致, 說明關鍵推理
+=== Output format (exact) ===
+信心評分: [1-10]
+理由: 技術面／情緒面／機構面／新聞面各1點，並總結，200字內
 倉位: 建議總資金%+分批策略
-風險: 風險管理建議
+風險: 主要風險因素（至少2點），需說明如何影響信心評分
 設定類型分析:
 類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號/無明確設定]
 模式特徵: [此類設定的3個關鍵特徵]
 本次評估:
 - 特殊風險: [本次獨特風險點]
-以上各項輸出說明和數據需邏輯一致，不要JSON。
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
@@ -287,16 +308,8 @@ Output format (exact):
         """Generate template-based sentiment when AI is unavailable."""
         fg_value = fear_greed.get('value', 50)
         
-        # Determine action from RSI (simple fallback)
+        # Non-technical fallback does not infer trading action from indicators
         tech_action = 'HOLD'
-        if len(df_with_indicators) > 0:
-            latest = df_with_indicators.iloc[-1]
-            rsi = latest.get('rsi') if pd.notna(latest.get('rsi')) else None
-            if rsi is not None:
-                if rsi < 30:
-                    tech_action = 'BUY'
-                elif rsi > 70:
-                    tech_action = 'SELL'
         
         # Determine sentiment class from Fear & Greed
         if fg_value <= 20:
@@ -347,17 +360,17 @@ Output format (exact):
         }
     
     def _generate_template_advice(self, tech_action: str, fear_greed: int, recommendation: str) -> str:
-        """Generate template-based advice when Gemini is unavailable."""
-        if recommendation == '積極買入' or (tech_action == 'BUY' and fear_greed < 30):
-            return "交易訊號: 分批建倉\n• RSI超賣區，恐懼指數偏低\n風險管理: 若進場建議分2-3批，首批30%倉位\n主要風險: 若跌破支撐位需及時停損"
-        elif recommendation == '分批建倉' or tech_action == 'BUY':
-            return "交易訊號: 分批建倉\n• 技術面偏多，注意倉位控制\n風險管理: 若進場建議輕倉20-30%\n主要風險: 若跌破前低需重新評估"
-        elif recommendation == '逢高減倉' or tech_action == 'SELL':
-            return "交易訊號: 逢高減倉\n• 技術面偏空，建議減少持倉\n風險管理: 若持有部位可減倉30-50%\n主要風險: 若續跌可能加速下行"
-        elif recommendation == '立即止損':
-            return "交易訊號: 立即止損\n• 多重風險訊號，建議離場\n風險管理: 減倉50-70%，保留觀察倉位\n主要風險: 若不及時止損可能擴大損失"
-        else:  # 持有觀望
-            return "交易訊號: 持有觀望\n• 訊號不明確，建議等待\n風險管理: 暫不建議新開倉位\n主要風險: 方向不明時進場容易兩面挨打"
+        """Generate template-based advice when Gemini is unavailable (composite, with tech verification)."""
+        sentiment_note = "市場情緒偏恐懼，資金與情緒可能反覆" if fear_greed < 40 else \
+                         "市場情緒偏貪婪，短線可能波動放大" if fear_greed > 60 else \
+                         "市場情緒中性，缺乏明確情緒方向"
+        return (
+            "信心評分: 5\n"
+            f"理由: 技術面以量化訊號作驗證；情緒面中性；機構面缺乏明確資金方向；新聞面缺乏重大催化。{sentiment_note}\n"
+            "倉位: 風險偏好中性 + 分批進場（以時間分散為主）\n"
+            "風險: 政策/監管變動可能壓低信心；流動性驟降會放大波動\n"
+            "本次評估:\n- 特殊風險: 非技術面訊號不足\n"
+        )
     
 
 

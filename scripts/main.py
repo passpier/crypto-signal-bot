@@ -87,6 +87,10 @@ def main():
         generator = SignalGenerator()
         df = generator.calculate_indicators(df)
         logger.info(f"✓ Technical indicators calculated (RSI, MACD, EMA, Bollinger Bands, OBV)")
+
+        # Generate technical signal and strength (quant scoring model)
+        tech_signal = generator.calculate_signal_strength(df)
+        logger.info(f"✓ Technical signal: {tech_signal.get('action')} | Strength: {tech_signal.get('strength')}/5")
         
         # ============================================
         # Step 3: Fetch Fear & Greed Index
@@ -140,7 +144,8 @@ def main():
                     news=news,
                     df_with_indicators=df,
                     current_price=current_price_value,
-                    institutional_data=institutional_data 
+                    institutional_data=institutional_data,
+                    tech_signal=tech_signal
                 )
                 sentiment['news_headlines'] = [n['title'] for n in news[:3]]
                 logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
@@ -176,18 +181,27 @@ def main():
         current_price_value = float(current_price['price'])
         
         signal_dict = {
-            'action': 'HOLD',  # AI will determine action
-            'strength': 3,
+            'action': tech_signal.get('action', 'HOLD'),
+            'strength': tech_signal.get('strength', 3),
             'price': current_price_value,
             'indicators': {
                 'rsi': float(latest['rsi']) if pd.notna(latest.get('rsi')) else None,
                 'macd': float(latest['macd']) if pd.notna(latest.get('macd')) else None,
                 'ema_12': float(latest['ema_12']) if pd.notna(latest.get('ema_12')) else None,
+                'ema_26': float(latest['ema_26']) if pd.notna(latest.get('ema_26')) else None,
                 'bb_upper': float(latest['bb_upper']) if pd.notna(latest.get('bb_upper')) else None,
                 'bb_middle': float(latest['bb_middle']) if pd.notna(latest.get('bb_middle')) else None,
                 'bb_lower': float(latest['bb_lower']) if pd.notna(latest.get('bb_lower')) else None,
                 'obv': float(latest['obv']) if pd.notna(latest.get('obv')) else None,
-                'volume_change': float(latest['volume_change']) if pd.notna(latest.get('volume_change')) else 0.0
+                'volume_change': float(latest['volume_change']) if pd.notna(latest.get('volume_change')) else 0.0,
+                'adx': float(latest['adx']) if pd.notna(latest.get('adx')) else None,
+                'stoch_k': float(latest['stoch_k']) if pd.notna(latest.get('stoch_k')) else None,
+                'stoch_d': float(latest['stoch_d']) if pd.notna(latest.get('stoch_d')) else None,
+                'volume_ma_20': float(latest['volume_ma_20']) if pd.notna(latest.get('volume_ma_20')) else None,
+                'support': float(latest['support']) if pd.notna(latest.get('support')) else None,
+                'obv_trend': tech_signal.get('obv_trend'),
+                'near_support': tech_signal.get('near_support'),
+                'bouncing': tech_signal.get('bouncing')
             }
         }
         
@@ -214,13 +228,19 @@ def main():
         logger.info("=" * 60)
         
         output = {
-            'action': 'HOLD',  # Determined by AI analysis
+            'action': tech_signal.get('action', 'HOLD'),
             'price': current_price_value,
             'technical': {
                 'rsi': signal_dict['indicators'].get('rsi'),
                 'macd': signal_dict['indicators'].get('macd'),
                 'ema_12': signal_dict['indicators'].get('ema_12'),
-                'volume_change': signal_dict['indicators'].get('volume_change')
+                'ema_26': signal_dict['indicators'].get('ema_26'),
+                'adx': signal_dict['indicators'].get('adx'),
+                'stoch_k': signal_dict['indicators'].get('stoch_k'),
+                'stoch_d': signal_dict['indicators'].get('stoch_d'),
+                'volume_change': signal_dict['indicators'].get('volume_change'),
+                'strength': tech_signal.get('strength'),
+                'score': tech_signal.get('score')
             },
             'institutional': {
                 'etf_net_flow': institutional_data['etf_flows']['net_flow'] if institutional_data and institutional_data.get('etf_flows') else None,
