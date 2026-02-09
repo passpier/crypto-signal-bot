@@ -189,92 +189,64 @@ class TelegramNotifier:
         signal: Dict, 
         sentiment: Optional[Dict] = None,
     ) -> bool:
-        """Send signal with expandable detailed analysis using HTML spoilers."""
+        """Send signal with concise, decision-first summary."""
         try:
-            # Parse AI data
-            ai_advice_text = sentiment.get('ai_advice_text', '') if sentiment else ''
-            ai_data = self._parse_text_signal(ai_advice_text)
-            
-            # Extract key info
-            # Always use technical signal/strength from quant model
-            signal_action = signal.get('action', ai_data.get('signal', 'HOLD'))
-            signal_strength = signal.get('strength', ai_data.get('strength', 3))
-            confidence_score = ai_data.get('confidence', 5)
-            
-            current_price = signal.get('price', 0)
-            entry_range = ai_data.get('entry_range', {})
-            target_price = ai_data.get('target_price', [])
-            stop_loss = ai_data.get('stop_loss_price', {})
-            risk_reward_ratio = ai_data.get('risk_reward_ratio', 0)
-            
-            pattern_type = ai_data.get('pattern_type', '')
-            key_factors = ai_data.get('key_factors', [])
-            risk_management = ai_data.get('risk_management', '')
-            main_risk = ai_data.get('main_risk', '')
-            
-            # Action mapping
+            # Extract core signal (from calculate_signal_strength)
+            signal_action = signal.get('action', 'HOLD')
+            signal_strength = int(signal.get('strength', 3) or 3)
+            score = float(signal.get('score', 0) or 0)
+            raw_score = float(signal.get('raw_score', 0) or 0)
+            direction_score = int(signal.get('direction_score', 0) or 0)
+            obv_trend = signal.get('obv_trend', 'flat')
+            near_support = signal.get('near_support')
+            near_resistance = signal.get('near_resistance')
+            bouncing = signal.get('bouncing')
+            atr_percent = float(signal.get('atr_percent', 0) or 0)
+            component_scores = signal.get('component_scores', {}) or {}
+            trade_plan = signal.get('trade_plan')
+
+            # Action mapping (display)
             action_map = {'BUY': '買入', 'SELL': '賣出', 'HOLD': '觀望'}
             action_emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}
             
             action_text = action_map.get(signal_action, '觀望')
             emoji = action_emoji.get(signal_action, '🟡')
-            confidence_emoji = self._get_confidence_emoji(confidence_score)
             
-            # === BUILD FULL MESSAGE (HTML FORMAT) ===
-            message = f"{emoji} <b>BTC {action_text}訊號</b> (強度 {signal_strength}/5) {confidence_emoji}\n\n"
-            
-            # Price info (compact)
-            message += f"現價: ${current_price:,.0f}\n"
-            
-            if entry_range:
-                entry_low = entry_range.get('low', 0)
-                entry_high = entry_range.get('high', 0)
-                if entry_low and entry_high:
-                    message += f"入場: ${entry_low:,.0f}-${entry_high:,.0f}\n"
-            
-            if target_price and len(target_price) > 0:
-                target = target_price[0]
-                target_price_value = target.get('price', 0)
-                target_pct = target.get('percentage', 0)
-                if target_price_value > 0:
-                    message += f"目標: ${target_price_value:,.0f} (+{target_pct:.1f}%)\n"
-            
-            if stop_loss:
-                stop_price = stop_loss.get('price', 0)
-                stop_pct = stop_loss.get('percentage', 0)
-                if stop_price > 0:
-                    message += f"停損: ${stop_price:,.0f} (-{stop_pct:.1f}%)\n"
-            
-            if risk_reward_ratio:
-                message += f"風報比: 1:{risk_reward_ratio:.1f}\n"
-            
+            # === BUILD MESSAGE (HTML FORMAT) ===
+            message = f"{emoji} <b>BTC {action_text}</b> (強度 {signal_strength}/5)\n"
+            message += f"✅ <b>建議動作</b>: {self._action_guidance(signal_action, trade_plan)}\n"
+            message += (
+                f"評分: {score:.2f} (原始 {raw_score:.2f}) | 方向: {direction_score:+d}\n"
+                f"OBV: {self._fmt_obv(obv_trend)} | 支撐: {self._fmt_flag(near_support)} | "
+                f"壓力: {self._fmt_flag(near_resistance)} | 反彈: {self._fmt_flag(bouncing)} | "
+                f"ATR%: {atr_percent:.2f}\n"
+            )
             message += "━━━━━━━━━━━━━━━━\n"
 
-            # Pattern + Confidence (one line)
-            if pattern_type:
-                message += f"📊 設定: {html.escape(pattern_type)}\n"
-            message += f"✨ 信心: {confidence_score}/10\n\n"
+            # Component scores
+            message += "<b>分數拆解</b>\n"
+            message += (
+                f"趨勢 {self._fmt_score(component_scores.get('trend'))} | "
+                f"動能 {self._fmt_score(component_scores.get('momentum'))} | "
+                f"量能 {self._fmt_score(component_scores.get('volume'))} | "
+                f"技術 {self._fmt_score(component_scores.get('technical'))}\n"
+            )
 
-            # Why? (full)
-            if key_factors:
-                reason = html.escape(key_factors[0])
-                message += f"💡 <b>理由</b>\n{reason}\n\n"
+            # Trade plan summary (if available)
+            if trade_plan:
+                message += "\n<b>交易計劃</b>\n"
+                message += self._format_trade_plan_full(trade_plan)
 
-            # Position sizing
-            if risk_management:
-                position_text = html.escape(risk_management)
-                message += f"📋 <b>倉位</b>\n{position_text}\n\n"
+            # Sentiment: Fear & Greed + Institutional + News
+            message += "\n━━━━━━━━━━━━━━━━\n"
+            message += self._format_sentiment_sections(sentiment)
 
-            # Main risk
-            if main_risk:
-                risk_text = html.escape(main_risk)
-                message += f"⚠️ <b>風險</b>\n{risk_text}\n\n"
-
-            message += "━━━━━━━━━━━━━━━━\n\n"
-
-            # === BUILD DETAILED ANALYSIS (Visible) ===
-            detailed = self._build_detailed_text(ai_data, signal, sentiment)
-            message += detailed
+            # AI advice text (if available)
+            ai_advice_text = sentiment.get('ai_advice_text') if sentiment else None
+            if ai_advice_text:
+                message += "\n━━━━━━━━━━━━━━━━\n"
+                message += "<b>AI 建議</b>\n"
+                message += f"{html.escape(str(ai_advice_text))}\n"
             
             # === BUTTON ===
             keyboard = [[
@@ -290,89 +262,264 @@ class TelegramNotifier:
                 parse_mode='HTML'
             )
             
-            logger.info(f"Sent signal: {action_text} (confidence: {confidence_score}/10)")
+            logger.info(f"Sent signal: {action_text} (strength: {signal_strength}/5)")
             return True
             
         except Exception as e:
             logger.error(f"Failed to send signal: {e}", exc_info=True)
             return False
 
-    def _build_detailed_text(self, ai_data: Dict, signal: Dict, sentiment: Dict) -> str:
-        """Build detailed analysis text."""
-        # Extract data
-        pattern_chars = ai_data.get('pattern_characteristics', [])
-        current_assessment = ai_data.get('current_assessment', {})
-        news_headlines = sentiment.get('news_headlines', []) if sentiment else []
-        data_warnings = sentiment.get('data_warnings', []) if sentiment else []
-        
-        rsi = signal['indicators'].get('rsi') if signal.get('indicators') else None
-        macd = signal['indicators'].get('macd') if signal.get('indicators') else None
-        volume_change = signal['indicators'].get('volume_change', 0) if signal.get('indicators') else 0
-        
+    def _format_sentiment_sections(self, sentiment: Optional[Dict]) -> str:
+        """Build Technical, Fear & Greed, Institutional Data, and News sections."""
         fear_greed_value = sentiment.get('fear_greed_value') if sentiment else None
-        fear_greed_class = sentiment.get('fear_greed_class', 'Neutral') if sentiment else 'Neutral'
+        fear_greed_class = sentiment.get('fear_greed_class') if sentiment else None
         inst_summary = sentiment.get('institutional_summary', {}) if sentiment else {}
-        etf_net = inst_summary.get('etf_net_m') if inst_summary else None
-        lsr_ratio = inst_summary.get('lsr_ratio') if inst_summary else None
-        
-        # Build detailed text
-        text = "<b>📊 完整資訊</b>\n\n"
-        
-        # Technical indicators
-        text += "<b>技術指標</b>\n"
-        if rsi is not None:
-            text += f"RSI: {rsi:.0f}\n"
-        if macd is not None:
-            macd_text = "多頭" if macd > 0 else "空頭"
-            text += f"MACD: {macd_text} ({macd:+.0f})\n"
-        if volume_change:
-            text += f"成交量: {volume_change:+.0f}%\n"
-        if fear_greed_value is not None:
-            text += f"恐懼指數: {fear_greed_value}/100 ({fear_greed_class})\n"
-        
-        # Institutional data
-        if etf_net or lsr_ratio:
-            text += "\n<b>機構數據</b>\n"
-            if etf_net:
-                text += f"ETF 淨流: ${etf_net:.0f}M\n"
-            if lsr_ratio:
-                text += f"多空比: {lsr_ratio:.2f}\n"
-        if data_warnings:
-            warning_line = html.escape(data_warnings[0])
-            text += f"\n{warning_line}\n"
-        
-        text += "\n━━━━━━━━━━━━━━━━\n\n"
+        news_headlines = sentiment.get('news_headlines', []) if sentiment else []
+        tech_summary = sentiment.get('technical_summary', {}) if sentiment else {}
 
-        # News headlines
+        text = ""
+
+        # Technical Indicators
+        text += "<b>技術指標</b>\n"
+        rsi = tech_summary.get('rsi')
+        macd = tech_summary.get('macd')
+        signal_line = tech_summary.get('signal_line')
+        volume_change = tech_summary.get('volume_change')
+
+        rsi_text = f"RSI {rsi:.0f}" if rsi is not None else "RSI N/A"
+        if macd is not None and signal_line is not None:
+            macd_text = "MACD 多頭" if macd >= signal_line else "MACD 空頭"
+        else:
+            macd_text = "MACD N/A"
+        text += f"{rsi_text} | {macd_text}\n"
+
+        if fear_greed_value is not None:
+            fg_class = html.escape(str(fear_greed_class or "N/A"))
+            text += f"恐懼指數: {fear_greed_value}/100 ({fg_class})\n"
+        else:
+            text += "恐懼指數: N/A\n"
+
+        if volume_change is not None:
+            text += f"成交量: {volume_change:+.0f}%\n"
+        else:
+            text += "成交量: N/A\n"
+
+        # Fear & Greed
+        text += "\n<b>Fear & Greed</b>\n"
+        if fear_greed_value is not None:
+            fg_class = html.escape(str(fear_greed_class or "N/A"))
+            text += f"指數: {fear_greed_value}/100 ({fg_class})\n"
+        else:
+            text += "指數: N/A\n"
+
+        # Institutional Data
+        text += "\n<b>Institutional Data</b>\n"
+        etf_net = inst_summary.get('etf_net_m')
+        lsr_ratio = inst_summary.get('lsr_ratio')
+        funding_rate_pct = inst_summary.get('funding_rate_pct')
+        if etf_net is not None:
+            text += f"ETF 淨流: {etf_net:+.0f}M\n"
+        if lsr_ratio is not None:
+            text += f"多空比: {lsr_ratio:.2f}\n"
+        if funding_rate_pct is not None:
+            text += f"Funding: {funding_rate_pct:+.3f}%\n"
+        if etf_net is None and lsr_ratio is None and funding_rate_pct is None:
+            text += "N/A\n"
+
+        # Crypto News
+        text += "\n<b>Crypto News</b>\n"
         if news_headlines:
-            text += "<b>📰 最新新聞</b>\n"
             for title in news_headlines[:3]:
                 text += f"• {html.escape(title)}\n"
-            text += "\n"
-        
-        # Pattern characteristics (legacy)
-        if pattern_chars:
-            text += "<b>模式特徵</b>\n"
-            for char in pattern_chars:
-                text += f"• {html.escape(char)}\n"
-            text += "\n"
-        
-        # Current setup assessment
-        if current_assessment:
-            text += "<b>🎯 本次評估</b>\n"
-            
-            if 'vs_typical' in current_assessment:
-                text += f"對比: {html.escape(current_assessment['vs_typical'])}\n"
-            
-            if 'special_risk' in current_assessment:
-                text += f"⚠️ {html.escape(current_assessment['special_risk'])}\n"
+        else:
+            text += "N/A\n"
 
-        # Raw AI text fallback (if parsing missing key fields)
-        if not ai_data.get('key_factors') and ai_data.get('raw_text'):
-            text += "\n<b>🧾 AI 原文</b>\n"
-            text += html.escape(ai_data['raw_text']) + "\n"
-        
         return text
+
+    def _format_trade_plan_full(self, trade_plan: Dict) -> str:
+        """Format trade plan with all fields included."""
+        lines = []
+
+        # Market regime + volatility
+        lines.append(f"市場型態: {self._fmt_text(trade_plan.get('market_regime'))}")
+        lines.append(f"波動率: {self._fmt_text(trade_plan.get('volatility'))}")
+        if trade_plan.get('atr_percent') is not None:
+            lines.append(f"ATR%: {trade_plan.get('atr_percent'):.2f}")
+
+        # Entries
+        entries = trade_plan.get('entries', {})
+        lines.append(
+            "入場價格: 激進 "
+            f"{self._fmt_price(entries.get('aggressive'))} | 保守 "
+            f"{self._fmt_price(entries.get('conservative'))} | 理想 "
+            f"{self._fmt_price(entries.get('ideal'))} | 掛單 "
+            f"{self._fmt_price(entries.get('limit_order'))}"
+        )
+        lines.append(f"入場建議: {self._fmt_text(trade_plan.get('entry_recommendation'))}")
+
+        # Stops
+        stops = trade_plan.get('stops', {})
+        lines.append(
+            "停損: 硬 "
+            f"{self._fmt_price(stops.get('hard_stop'))} | 軟 "
+            f"{self._fmt_price(stops.get('soft_stop'))} | 移動 "
+            f"{self._fmt_price(stops.get('trailing_stop'))} | 心理 "
+            f"{self._fmt_price(stops.get('mental_stop'))}"
+        )
+        lines.append(f"停損建議: {self._fmt_text(trade_plan.get('stop_recommendation'))}")
+
+        # Targets
+        targets = trade_plan.get('targets', {})
+        lines.append(
+            "目標: T1 "
+            f"{self._fmt_price(targets.get('T1'))} | T2 "
+            f"{self._fmt_price(targets.get('T2'))} | T3 "
+            f"{self._fmt_price(targets.get('T3'))} | Moon "
+            f"{self._fmt_price(targets.get('moon'))}"
+        )
+        lines.append(f"目標建議: {self._fmt_text(trade_plan.get('target_recommendation'))}")
+
+        # Risk reward
+        rr = trade_plan.get('risk_reward_ratios', {})
+        lines.append(
+            "風報比: T1 "
+            f"{self._fmt_score(rr.get('T1'))} | T2 "
+            f"{self._fmt_score(rr.get('T2'))} | T3 "
+            f"{self._fmt_score(rr.get('T3'))}"
+        )
+        lines.append(f"最低風報比: {self._fmt_score(trade_plan.get('min_acceptable_rr'))}")
+        lines.append(f"最佳風報比: {self._fmt_score(trade_plan.get('actual_best_rr'))}")
+
+        # Position sizing
+        position = trade_plan.get('position_sizing', {})
+        lines.append(
+            "倉位: 凱利 "
+            f"{self._fmt_percent(position.get('kelly_fraction'))} | 保守 "
+            f"{self._fmt_percent(position.get('conservative'))} | 激進 "
+            f"{self._fmt_percent(position.get('aggressive'))} | 建議 "
+            f"{self._fmt_percent(position.get('recommended'))} | 最大風險 "
+            f"{self._fmt_percent(position.get('max_risk_percent'), raw_percent=True)}"
+        )
+        lines.append(f"倉位建議: {self._fmt_text(trade_plan.get('position_recommendation'))}")
+
+        # Pyramiding
+        pyramiding = trade_plan.get('pyramiding', {})
+        add_levels = pyramiding.get('add_on_levels', []) if pyramiding else []
+        add_levels_text = ", ".join(self._fmt_price(p) for p in add_levels) if add_levels else "—"
+        lines.append(
+            "加碼: 啟用 "
+            f"{self._fmt_flag(pyramiding.get('enabled'))} | 水位 "
+            f"{add_levels_text} | 縮減 "
+            f"{self._fmt_score(pyramiding.get('reduce_size_by'))}"
+        )
+
+        # Holding period
+        holding = trade_plan.get('holding_period', {})
+        lines.append(
+            "持有期: 最短 "
+            f"{self._fmt_days(holding.get('min_days'))} | 預期 "
+            f"{self._fmt_days(holding.get('expected_days'))} | 最長 "
+            f"{self._fmt_days(holding.get('max_days'))} | 型態 "
+            f"{self._fmt_text(holding.get('regime_factor'))}"
+        )
+        lines.append(f"時間停損: {self._fmt_flag(trade_plan.get('time_stop_enabled'))}")
+
+        # Exit strategy
+        exit_strategy = trade_plan.get('exit_strategy', {})
+        lines.append(
+            "出場策略: T1 "
+            f"{self._fmt_text(exit_strategy.get('T1_action'))} | T2 "
+            f"{self._fmt_text(exit_strategy.get('T2_action'))} | T3 "
+            f"{self._fmt_text(exit_strategy.get('T3_action'))} | 停損 "
+            f"{self._fmt_text(exit_strategy.get('stop_hit'))} | 時間 "
+            f"{self._fmt_text(exit_strategy.get('time_stop'))} | 反轉 "
+            f"{self._fmt_text(exit_strategy.get('signal_reversal'))}"
+        )
+
+        # Risk warnings
+        warnings = trade_plan.get('risk_warnings', [])
+        if warnings:
+            for w in warnings:
+                lines.append(f"風險提示: {html.escape(str(w))}")
+        else:
+            lines.append("風險提示: —")
+
+        # Expectancy
+        if trade_plan.get('estimated_win_rate') is not None:
+            lines.append(f"預估勝率: {trade_plan.get('estimated_win_rate'):.1f}%")
+        else:
+            lines.append("預估勝率: —")
+        if trade_plan.get('expected_return') is not None:
+            lines.append(f"期望報酬: {trade_plan.get('expected_return'):.1f}%")
+        else:
+            lines.append("期望報酬: —")
+
+        return "\n".join(lines) + "\n"
+
+    def _fmt_score(self, value: Optional[float]) -> str:
+        if value is None:
+            return "—"
+        return f"{float(value):.1f}"
+
+    def _fmt_price(self, value: Optional[float]) -> str:
+        if value is None:
+            return "—"
+        return f"${float(value):,.2f}"
+
+    def _fmt_days(self, value: Optional[int]) -> str:
+        if value is None:
+            return "—"
+        return f"{int(value)}d"
+
+    def _fmt_text(self, value: Optional[str]) -> str:
+        if value is None or value == "":
+            return "—"
+        return html.escape(str(value))
+
+    def _fmt_percent(self, value: Optional[float], raw_percent: bool = False) -> str:
+        if value is None:
+            return "—"
+        if raw_percent:
+            return f"{float(value):.1f}%"
+        return f"{float(value) * 100:.1f}%"
+
+    def _fmt_obv(self, obv_trend: str) -> str:
+        if obv_trend == 'up':
+            return "上升"
+        if obv_trend == 'down':
+            return "下降"
+        return "持平"
+
+    def _fmt_flag(self, value: Optional[bool]) -> str:
+        if value is True:
+            return "是"
+        if value is False:
+            return "否"
+        return "—"
+
+    def _action_guidance(self, action: str, trade_plan: Optional[Dict]) -> str:
+        if action == 'HOLD' or not trade_plan:
+            return "觀望，等待更佳訊號"
+
+        entries = trade_plan.get('entries', {}) if trade_plan else {}
+        stops = trade_plan.get('stops', {}) if trade_plan else {}
+        targets = trade_plan.get('targets', {}) if trade_plan else {}
+        pos_rec = trade_plan.get('position_recommendation')
+        position = trade_plan.get('position_sizing', {}) if trade_plan else {}
+
+        entry = self._fmt_price(entries.get('conservative') or entries.get('aggressive'))
+        stop = self._fmt_price(stops.get('hard_stop'))
+        t1 = self._fmt_price(targets.get('T1'))
+        size = pos_rec
+        if not size and position.get('recommended') is not None:
+            size = f"{position.get('recommended') * 100:.1f}%"
+        size = size or "—"
+
+        if action == 'BUY':
+            return f"在 {entry} 附近分批買入，硬停損 {stop}，T1 {t1}，倉位 {size}"
+        if action == 'SELL':
+            return f"在 {entry} 附近分批賣出，硬停損 {stop}，T1 {t1}，倉位 {size}"
+        return "觀望，等待更佳訊號"
 
     def _get_confidence_emoji(self, confidence: int) -> str:
         """Get emoji for confidence level."""

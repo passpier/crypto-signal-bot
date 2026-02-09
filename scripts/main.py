@@ -4,6 +4,7 @@ import sys
 import logging
 import asyncio
 import os
+import pandas as pd
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -91,6 +92,8 @@ def main():
         # Generate technical signal and strength (quant scoring model)
         tech_signal = generator.calculate_signal_strength(df)
         logger.info(f"✓ Technical signal: {tech_signal.get('action')} | Strength: {tech_signal.get('strength')}/5")
+
+        latest = df.iloc[-1]
         
         # ============================================
         # Step 3: Fetch Fear & Greed Index
@@ -130,6 +133,35 @@ def main():
             logger.info(f"✓ Fetched {len(news)} news articles")
         except Exception as e:
             logger.warning(f"⚠ Failed to fetch crypto news: {e}")
+
+        # Build Telegram payload (no AI dependency)
+        telegram_context = {
+            'fear_greed_value': fear_greed.get('value') if fear_greed else None,
+            'fear_greed_class': fear_greed.get('classification') if fear_greed else None,
+            'institutional_summary': {},
+            'news_headlines': [n.get('title') for n in news[:3] if n.get('title')] if news else [],
+            'technical_summary': {}
+        }
+
+        if institutional_data:
+            etf_flows = institutional_data.get('etf_flows') or {}
+            lsr = institutional_data.get('long_short_ratio') or {}
+            funding = institutional_data.get('funding_rate') or {}
+
+            if etf_flows.get('net_flow') is not None:
+                telegram_context['institutional_summary']['etf_net_m'] = etf_flows['net_flow'] / 1e6
+            if lsr.get('ratio') is not None:
+                telegram_context['institutional_summary']['lsr_ratio'] = lsr['ratio']
+            if funding.get('rate_pct') is not None:
+                telegram_context['institutional_summary']['funding_rate_pct'] = funding['rate_pct']
+
+        # Technical summary for Telegram sentiment block
+        telegram_context['technical_summary'] = {
+            'rsi': float(latest['rsi']) if pd.notna(latest.get('rsi')) else None,
+            'macd': float(latest['macd']) if pd.notna(latest.get('macd')) else None,
+            'signal_line': float(latest['signal_line']) if pd.notna(latest.get('signal_line')) else None,
+            'volume_change': float(latest['volume_change']) if pd.notna(latest.get('volume_change')) else None
+        }
         
         # ============================================
         # Step 6: Analyze Sentiment with AI
@@ -147,7 +179,8 @@ def main():
                     institutional_data=institutional_data,
                     tech_signal=tech_signal
                 )
-                sentiment['news_headlines'] = [n['title'] for n in news[:3]]
+                if sentiment and 'ai_advice_text' in sentiment:
+                    telegram_context['ai_advice_text'] = sentiment['ai_advice_text']
                 logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
             else:
                 logger.warning("⚠ Skipping AI analysis - Fear & Greed data unavailable")
@@ -176,8 +209,6 @@ def main():
         logger.info("[7/7] Processing notification...")
         
         # Create minimal signal dict from DataFrame for Telegram bot compatibility
-        import pandas as pd
-        latest = df.iloc[-1]
         current_price_value = float(current_price['price'])
         
         signal_dict = {
@@ -211,8 +242,8 @@ def main():
             try:
                 notifier = TelegramNotifier()
                 asyncio.run(notifier.send_signal(
-                    signal=signal_dict,
-                    sentiment=sentiment,
+                    signal=tech_signal,
+                    sentiment=telegram_context,
                 ))
                 logger.info("✓ Signal sent to Telegram!")
             except Exception as e:
@@ -228,28 +259,19 @@ def main():
         logger.info("=" * 60)
         
         output = {
-            'action': tech_signal.get('action', 'HOLD'),
-            'price': current_price_value,
-            'technical': {
-                'rsi': signal_dict['indicators'].get('rsi'),
-                'macd': signal_dict['indicators'].get('macd'),
-                'ema_12': signal_dict['indicators'].get('ema_12'),
-                'ema_26': signal_dict['indicators'].get('ema_26'),
-                'adx': signal_dict['indicators'].get('adx'),
-                'stoch_k': signal_dict['indicators'].get('stoch_k'),
-                'stoch_d': signal_dict['indicators'].get('stoch_d'),
-                'volume_change': signal_dict['indicators'].get('volume_change'),
-                'strength': tech_signal.get('strength'),
-                'score': tech_signal.get('score')
-            },
+            'signal': tech_signal,
+            'fear_greed': {
+                'value': fear_greed.get('value') if fear_greed else None,
+                'classification': fear_greed.get('classification') if fear_greed else None
+            } if fear_greed else None,
             'institutional': {
                 'etf_net_flow': institutional_data['etf_flows']['net_flow'] if institutional_data and institutional_data.get('etf_flows') else None,
-                'long_short_ratio': institutional_data['long_short_ratio']['ratio'] if institutional_data and institutional_data.get('long_short_ratio') else None
+                'long_short_ratio': institutional_data['long_short_ratio']['ratio'] if institutional_data and institutional_data.get('long_short_ratio') else None,
+                'funding_rate_pct': institutional_data['funding_rate']['rate_pct'] if institutional_data and institutional_data.get('funding_rate') else None
             } if institutional_data else None,
-            'sentiment': {
-                'fear_greed': sentiment.get('fear_greed_value') if sentiment else None,
-                'ai_advice': sentiment.get('ai_advice_text') if sentiment else None
-            } if sentiment else None,
+            'crypto_news': [n.get('title') for n in news[:3]] if news else [],
+            'ai_advice': sentiment.get('ai_advice_text') if sentiment else None,
+            'telegram_payload': telegram_context,
             # 'backtest': {
             #     'win_rate': backtest_stats.get('win_rate') if backtest_stats else None,
             #     'total_trades': backtest_stats.get('total_trades') if backtest_stats else None

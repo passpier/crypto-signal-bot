@@ -235,39 +235,22 @@ ETF:${etf_net:.0f}M({etf_signal}) L/S:{lsr_ratio:.2f}({lsr_signal}) FR:{funding_
 === Market Data ===
 BTCUSDT ${current_price:,.0f}
 Technical: RSI:{tech_rsi:.0f} MACD:{tech_macd:+.0f} EMA12 diff%:{ema_diff_pct:+.1f}% BB position:{bb_position_pct:.0f}% OBV change:{obv_str} Volume change (7d avg):{vol_str}
-Computed Technical Signal (for verification only): {tech_signal_action} | Strength:{tech_signal_strength}/5 | Score:{tech_signal_score}
+Computed Technical Signal: {tech_signal_action} | Strength:{tech_signal_strength}/5 | Score:{tech_signal_score}
 Fear&Greed:{fear_greed_value} (Class:{fear_greed_class})
 {institutional_prompt}
 {news_context}
 
-=== Analysis Rules ===
-Analyze the data objectively. Acknowledge when signals conflict. Never fabricate levels, targets, percentages, or ratios. If a required value cannot be justified, output "N/A".
+=== Rules ===
+Analysis instructions: Analyze Bitcoin (BTC) investment opportunity objectively. 
+Acknowledge when signals conflict. Never fabricate levels, targets, percentages, 
+or ratios. If a required value cannot be justified, output "N/A". If data is 
+insufficient or conviction is low, recommend HOLD instead of forcing a trade.
 
-[執行信心評分 1-10]綜合確定性
-計算公式：各維度評分加權平均
-1.技術面(40%): 訊號強度 × 2 (1-5 映射到 2-10)
-2.基本面(30%): 機構動向評分 0-10
- - ETF大幅流入(>$500M)=10 | 流入($100-500M)=7 | 中性=5 | 流出=3 | 大幅流出(<-$500M)=0
- - Long/Short比率: >3=8 | 2-3=6 | 1-2=4 | <1=2
-3.情緒面(20%): Fear&Greed指數調整
- - 極度恐慌(<10)且技術反彈=8 | 恐慌(10-25)=6 | 中性(25-75)=5 | 貪婪(75-90)=4 | 極度貪婪(>90)=2
-4.風險面(10%): 新聞/監管風險
- - 無重大風險=10 | 潛在風險=7 | 已知風險=5 | 重大利空=2
-
-最終分數 = (技術×0.4 + 基本面×0.3 + 情緒×0.2 + 風險×0.1)
-映射到行動: 1-2=HOLD | 3-4=輕倉5-15% | 5-6=標準15-25% | 7-8=重倉25-40% | 9-10=滿倉40-60%
-
-輸出要求所有數據邏輯一致, 說明關鍵推理
-=== Output format (exact) ===
-信心評分: [1-10]
-理由: 技術面／情緒面／機構面／新聞面各1點，並總結，200字內
-倉位: 建議總資金%+分批策略
-風險: 主要風險因素（至少2點），需說明如何影響信心評分
-設定類型分析:
-類型: [極度超賣反彈/趨勢突破/盤整震盪/反轉訊號/無明確設定]
-模式特徵: [此類設定的3個關鍵特徵]
-本次評估:
-- 特殊風險: [本次獨特風險點]
+== Output format(exact) ==
+分類：極度超賣反彈/趨勢突破/盤整震盪/反轉/無明確
+訊號: BUY/SELL/HOLD
+理由: 技術面／情緒面／機構面／新聞面各1點，並總結，200字內  
+風險: [本次獨特風險點]
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
