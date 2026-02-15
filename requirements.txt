@@ -1,5 +1,6 @@
-# Azure Functions (required for Azure deployment)
-azure-functions>=1.18.0
+# Cloud Run (HTTP server + WSGI server)
+Flask>=3.0.0
+gunicorn>=21.2.0
 
 # Bot dependencies
 google-generativeai>=0.8.0  # Direct Gemini API (simpler, fewer conflicts)

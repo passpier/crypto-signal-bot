@@ -139,7 +139,6 @@ ETF 淨流: $-493M
 - **Telegram Bot Token** - Get from [@BotFather](https://t.me/BotFather)
 - **Telegram Chat ID** - Get from [@userinfobot](https://t.me/userinfobot)
 - **Google Gemini API Key** - Free tier (1,500/day) from [AI Studio](https://aistudio.google.com/apikey)
-- Docker (for n8n automation)
 
 ## 💻 Usage
 
@@ -156,57 +155,6 @@ pip install -r requirements.txt
 python tests/test_quick.py           # Quick manual test
 python -m unittest discover tests  # Full test suite
 python scripts/main.py               # Run live bot
-```
-
-## ⚙️ Configuration
-
-### Trading Parameters (`config/config.yaml`)
-```yaml
-api_keys:
-  telegram_token: "YOUR_TELEGRAM_BOT_TOKEN"      # From @BotFather
-  telegram_chat_id: "YOUR_CHAT_ID"               # From @userinfobot
-  gemini_api_key: "YOUR_GEMINI_KEY"              # Optional, from AI Studio
-
-trading:
-  symbol: "BTCUSDT"          # Trading pair
-  stop_loss_percent: 3       # Default stop loss (%)
-  take_profit_percent: 6     # Default take profit (%)
-  
-indicators:
-  rsi_period: 14             # RSI calculation period
-  rsi_oversold: 30           # Buy signal threshold
-  rsi_overbought: 70         # Sell signal threshold
-  macd_fast: 12              # MACD fast EMA
-  macd_slow: 26              # MACD slow EMA
-  macd_signal: 9             # MACD signal line
-```
-
-## 🏗️ Project Structure
-
-```
-crypto-signal-bot/
-├── scripts/
-│   ├── main.py                  # Main orchestrator (combined analysis)
-│   ├── data_fetcher.py          # Binance API integration
-│   ├── signal_generator.py      # Technical analysis (RSI, MACD, MA)
-│   ├── sentiment_analyzer.py    # Sentiment (Fear&Greed, News, AI)
-│   ├── coinglass_fetcher.py     # Institutional data (ETF/liquidations/LSR)
-│   ├── telegram_bot.py          # Enhanced message format
-│   ├── backtest.py              # 30-day performance testing
-│   └── utils.py                 # Config & logging
-├── config/config.yaml           # Settings & API keys
-│── __init__.py                  # Timer trigger function
-│── function_app.py              # Function app configuration
-│── host.json                    # Host settings
-├── .funcignore                  # Deployment exclusions
-├── Dockerfile                   # Production container
-├── docker-compose.prod.yml      # Production deployment
-├── docker-compose.yml           # Development (n8n)
-├── tests/
-│   ├── test_all.py            # All unit tests
-│   ├── test_integration.py    # Integration tests
-│   └── test_quick.py          # Quick manual test
-└── logs/bot.log               # Execution logs
 ```
 
 ## 📄 License & Disclaimer

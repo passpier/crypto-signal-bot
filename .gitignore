@@ -39,3 +39,6 @@ n8n_data/
 # Config with secrets (keep example)
 config/config.yaml
 
+# GCP deployment
+.gcloudignore
+
