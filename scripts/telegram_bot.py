@@ -237,9 +237,15 @@ class TelegramNotifier:
                 message += "\n<b>交易計劃</b>\n"
                 message += self._format_trade_plan_full(trade_plan)
 
+            # Backtest section (if available)
+            backtest_stats = sentiment.get('backtest_stats') if sentiment else None
+            if backtest_stats and 'error' not in backtest_stats:
+                message += "\n━━━━━━━━━━━━━━━━\n"
+                message += self._format_backtest_section(backtest_stats)
+
             # Sentiment: Fear & Greed + Institutional + News
             message += "\n━━━━━━━━━━━━━━━━\n"
-            message += self._format_sentiment_sections(sentiment)
+            message += self._format_sentiment_sections(sentiment, signal)
 
             # AI advice text (if available)
             ai_advice_text = sentiment.get('ai_advice_text') if sentiment else None
@@ -269,7 +275,7 @@ class TelegramNotifier:
             logger.error(f"Failed to send signal: {e}", exc_info=True)
             return False
 
-    def _format_sentiment_sections(self, sentiment: Optional[Dict]) -> str:
+    def _format_sentiment_sections(self, sentiment: Optional[Dict], signal: Optional[Dict] = None) -> str:
         """Build Technical, Fear & Greed, Institutional Data, and News sections."""
         fear_greed_value = sentiment.get('fear_greed_value') if sentiment else None
         fear_greed_class = sentiment.get('fear_greed_class') if sentiment else None
@@ -279,30 +285,29 @@ class TelegramNotifier:
 
         text = ""
 
-        # Technical Indicators
+        # Enhanced Technical Indicators (4-category structure)
         text += "<b>技術指標</b>\n"
-        rsi = tech_summary.get('rsi')
-        macd = tech_summary.get('macd')
-        signal_line = tech_summary.get('signal_line')
-        volume_change = tech_summary.get('volume_change')
-
-        rsi_text = f"RSI {rsi:.0f}" if rsi is not None else "RSI N/A"
-        if macd is not None and signal_line is not None:
-            macd_text = "MACD 多頭" if macd >= signal_line else "MACD 空頭"
+        if signal:
+            text += self._format_technical_indicators_enhanced(tech_summary, signal)
+            text += "\n"
         else:
-            macd_text = "MACD N/A"
-        text += f"{rsi_text} | {macd_text}\n"
+            # Fallback to basic display
+            rsi = tech_summary.get('rsi')
+            macd = tech_summary.get('macd')
+            signal_line = tech_summary.get('signal_line')
+            volume_change = tech_summary.get('volume_change')
 
-        if fear_greed_value is not None:
-            fg_class = html.escape(str(fear_greed_class or "N/A"))
-            text += f"恐懼指數: {fear_greed_value}/100 ({fg_class})\n"
-        else:
-            text += "恐懼指數: N/A\n"
+            rsi_text = f"RSI {rsi:.0f}" if rsi is not None else "RSI N/A"
+            if macd is not None and signal_line is not None:
+                macd_text = "MACD 多頭" if macd >= signal_line else "MACD 空頭"
+            else:
+                macd_text = "MACD N/A"
+            text += f"{rsi_text} | {macd_text}\n"
 
-        if volume_change is not None:
-            text += f"成交量: {volume_change:+.0f}%\n"
-        else:
-            text += "成交量: N/A\n"
+            if volume_change is not None:
+                text += f"成交量: {volume_change:+.0f}%\n"
+            else:
+                text += "成交量: N/A\n"
 
         # Fear & Greed
         text += "\n<b>Fear & Greed</b>\n"
@@ -401,6 +406,8 @@ class TelegramNotifier:
             f"{self._fmt_percent(position.get('max_risk_percent'), raw_percent=True)}"
         )
         lines.append(f"倉位建議: {self._fmt_text(trade_plan.get('position_recommendation'))}")
+        kelly_source = position.get('kelly_source', '未知')
+        lines.append(f"凱利依據: {self._fmt_text(kelly_source)}")
 
         # Pyramiding
         pyramiding = trade_plan.get('pyramiding', {})
@@ -531,6 +538,174 @@ class TelegramNotifier:
             return "💫"
         else:
             return "⚠️"
+
+    def _format_technical_indicators_enhanced(self, tech_summary: Dict, signal: Dict) -> str:
+        """Format enhanced technical indicators with 4-category structure (Trend/Momentum/Position/Volume)."""
+        lines = []
+
+        # Extract indicators
+        indicators = signal.get('indicators', {})
+        ema_12 = indicators.get('ema_12')
+        ema_26 = indicators.get('ema_26')
+        ema_50 = indicators.get('ema_50')
+        ema_200 = indicators.get('ema_200')
+        adx = indicators.get('adx')
+        rsi = tech_summary.get('rsi')
+        stoch_k = indicators.get('stoch_k')
+        stoch_d = indicators.get('stoch_d')
+        bb_upper = indicators.get('bb_upper')
+        bb_middle = indicators.get('bb_middle')
+        bb_lower = indicators.get('bb_lower')
+        support = indicators.get('support')
+        resistance = indicators.get('resistance')
+        price = signal.get('price')
+        volume_change = tech_summary.get('volume_change')
+        obv_trend = signal.get('obv_trend')
+
+        # Trend indicators
+        trend_parts = []
+        if ema_12 and ema_26 and ema_50 and ema_200:
+            if ema_12 > ema_26 > ema_50 > ema_200:
+                trend_parts.append("EMA 多頭排列")
+            elif ema_12 < ema_26 < ema_50 < ema_200:
+                trend_parts.append("EMA 空頭排列")
+            else:
+                trend_parts.append("EMA 混亂")
+
+        if adx is not None:
+            if adx > 25:
+                trend_parts.append(f"ADX {adx:.1f} (強趨勢)")
+            elif adx > 20:
+                trend_parts.append(f"ADX {adx:.1f} (弱趨勢)")
+            else:
+                trend_parts.append(f"ADX {adx:.1f} (盤整)")
+
+        if trend_parts:
+            lines.append("【趨勢】" + " | ".join(trend_parts))
+
+        # Momentum indicators
+        momentum_parts = []
+        if rsi is not None:
+            if rsi < 30:
+                momentum_parts.append(f"RSI {rsi:.0f} (超賣)")
+            elif rsi > 70:
+                momentum_parts.append(f"RSI {rsi:.0f} (超買)")
+            elif rsi < 40:
+                momentum_parts.append(f"RSI {rsi:.0f} (偏空)")
+            elif rsi > 60:
+                momentum_parts.append(f"RSI {rsi:.0f} (偏多)")
+            else:
+                momentum_parts.append(f"RSI {rsi:.0f} (中性)")
+
+        if stoch_k is not None and stoch_d is not None:
+            if stoch_k > stoch_d:
+                momentum_parts.append(f"隨機 {stoch_k:.0f}↗{stoch_d:.0f} (金叉)")
+            else:
+                momentum_parts.append(f"隨機 {stoch_k:.0f}↘{stoch_d:.0f} (死叉)")
+
+        if momentum_parts:
+            lines.append("【動能】" + " | ".join(momentum_parts))
+
+        # Position indicators (Bollinger Bands + Support/Resistance)
+        position_parts = []
+        if price and bb_upper and bb_middle and bb_lower:
+            if price > bb_upper:
+                position_parts.append("布林 上軌突破")
+            elif price < bb_lower:
+                position_parts.append("布林 下軌突破")
+            else:
+                band_range = bb_upper - bb_lower
+                position_pct = ((price - bb_lower) / band_range * 100) if band_range > 0 else 50
+                if position_pct > 80:
+                    position_parts.append(f"布林 上軌-{100-position_pct:.0f}%")
+                elif position_pct < 20:
+                    position_parts.append(f"布林 下軌+{position_pct:.0f}%")
+                else:
+                    position_parts.append("布林 中軌")
+
+        if support:
+            position_parts.append(f"支撐 {support:,.0f}")
+        if resistance:
+            position_parts.append(f"壓力 {resistance:,.0f}")
+
+        if position_parts:
+            lines.append("【位置】" + " | ".join(position_parts))
+
+        # Volume indicators
+        if volume_change is not None:
+            obv_text = self._fmt_obv(obv_trend)
+            lines.append(f"【量能】成交量 {volume_change:+.0f}% | OBV {obv_text}")
+
+        return "\n".join(lines)
+
+    def _calculate_confidence(self, total_trades: int) -> str:
+        """Statistical confidence based on sample size."""
+        if total_trades >= 30:
+            return "高"
+        elif total_trades >= 15:
+            return "中"
+        elif total_trades >= 5:
+            return "低"
+        else:
+            return "極低"
+
+    def _format_equity_sparkline(self, equity_curve: list, bins: int = 10) -> str:
+        """Convert equity curve to Unicode sparkline."""
+        if not equity_curve or len(equity_curve) < 2:
+            return "—"
+
+        step = max(1, len(equity_curve) // bins)
+        sampled = [equity_curve[i * step] for i in range(min(bins, len(equity_curve) // step))]
+
+        if len(sampled) < 2:
+            return "—"
+
+        min_val = min(sampled)
+        max_val = max(sampled)
+        if max_val == min_val:
+            return "▅" * len(sampled)
+
+        blocks = " ▁▂▃▄▅▆▇█"
+        normalized = [(v - min_val) / (max_val - min_val) * 8 for v in sampled]
+        return "".join(blocks[int(n)] for n in normalized)
+
+    def _format_backtest_section(self, backtest_stats: Optional[Dict]) -> str:
+        """Format backtest performance section."""
+        if not backtest_stats or 'error' in backtest_stats:
+            return ""
+
+        wins = backtest_stats.get('wins', 0)
+        losses = backtest_stats.get('losses', 0)
+        total = wins + losses
+        win_rate = backtest_stats.get('win_rate', 0)
+        avg_profit = backtest_stats.get('avg_profit', 0)
+        best = backtest_stats.get('best_trade', 0)
+        worst = backtest_stats.get('worst_trade', 0)
+        max_dd = backtest_stats.get('max_drawdown', 0)
+        total_return = backtest_stats.get('total_return', 0)
+        equity_curve = backtest_stats.get('equity_curve', [])
+
+        confidence = self._calculate_confidence(total)
+        sparkline = self._format_equity_sparkline(equity_curve)
+
+        lines = []
+        lines.append("<b>回測績效 (30天)</b>")
+        lines.append(
+            f"勝率: {win_rate:.1f}% ({wins}勝/{losses}負) | "
+            f"平均盈虧: {avg_profit:+.1f}%"
+        )
+        lines.append(
+            f"最佳: {best:+.1f}% | 最差: {worst:+.1f}% | "
+            f"最大回撤: {max_dd:.1f}%"
+        )
+        lines.append(
+            f"總報酬: {total_return:+.1f}% | "
+            f"信心: {confidence} ({total}筆樣本)"
+        )
+        if sparkline != "—":
+            lines.append(f"📊 權益曲線: {sparkline}")
+
+        return "\n".join(lines) + "\n"
 
 
 # Test

@@ -9,12 +9,11 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Detect if running in Azure Functions
-IS_AZURE_FUNCTIONS = os.getenv('FUNCTIONS_WORKER_RUNTIME') is not None or \
-                     os.getenv('WEBSITE_INSTANCE_ID') is not None
+# Detect if running in Google Cloud Run
+IS_CLOUD_RUN = os.getenv('K_SERVICE') is not None
 
-# Setup logging - adapt for Azure Functions
-if IS_AZURE_FUNCTIONS:
+# Setup logging - adapt for Cloud Run
+if IS_CLOUD_RUN:
     # Azure Functions: Use only StreamHandler (logs go to Application Insights)
     logging.basicConfig(
         level=logging.INFO,
@@ -46,11 +45,11 @@ def get_project_root() -> Path:
 def load_config(config_path: Optional[str] = None) -> dict:
     """
     Load configuration from YAML file, with environment variable overrides.
-    Supports Azure Functions mode where config file may not exist.
-    
+    Supports Cloud Run mode where config file may not exist.
+
     Args:
         config_path: Path to config file. Defaults to config/config.yaml
-        
+
     Returns:
         Configuration dictionary
     """
@@ -58,14 +57,14 @@ def load_config(config_path: Optional[str] = None) -> dict:
         config_path = get_project_root() / 'config' / 'config.yaml'
     else:
         config_path = Path(config_path)
-    
+
     # Try to load from YAML file if it exists
     if config_path.exists():
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
     else:
-        # Azure Functions mode: create config from environment variables
-        logger.info("Config file not found, loading from environment variables (Azure Functions mode)")
+        # Cloud Run mode: create config from environment variables
+        logger.info("Config file not found, loading from environment variables (Cloud Run mode)")
         config = {
             'api_keys': {},
             'trading': {},
@@ -77,7 +76,7 @@ def load_config(config_path: Optional[str] = None) -> dict:
     config.setdefault('trading', {})
     config.setdefault('indicators', {})
     
-    # Load from environment variables (Azure Functions App Settings)
+    # Load from environment variables (Cloud Run or local)
     # These override YAML values if present
     config['api_keys']['telegram_token'] = os.getenv(
         'TELEGRAM_TOKEN', 

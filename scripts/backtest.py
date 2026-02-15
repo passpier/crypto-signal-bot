@@ -47,9 +47,14 @@ class SimpleBacktest:
                     'losses': 0,
                     'win_rate': 0,
                     'avg_profit': 0,
+                    'avg_win': 0,
+                    'avg_loss': 0,
                     'max_drawdown': 0,
                     'best_trade': 0,
+                    'worst_trade': 0,
                     'total_trades': 0,
+                    'total_return': 0,
+                    'equity_curve': [],
                     'error': 'Insufficient data'
                 }
             
@@ -62,13 +67,20 @@ class SimpleBacktest:
             for i in range(200, len(df) - 24):  # Leave 24 hours for future price check
                 try:
                     window_df = df.iloc[:i+1].copy()
-                    signal = self.generator.generate_signal(window_df)
+                    signal = self.generator.calculate_signal_strength(window_df)
                     
                     if signal['action'] in ['BUY', 'SELL']:
                         # Simulate trade
-                        entry_price = signal['price']
-                        stop_loss = signal['stop_loss']
-                        take_profit = signal['take_profit']
+                        entry_price = signal.get('price', df.iloc[i]['close'])
+                        trade_plan = signal.get('trade_plan')
+
+                        if not trade_plan:
+                            continue
+
+                        stops = trade_plan.get('stops', {})
+                        targets = trade_plan.get('targets', {})
+                        stop_loss = stops.get('hard_stop', 0)
+                        take_profit = targets.get('T2', 0)
                         
                         # Check future prices (next 24 hours)
                         future_prices = df.iloc[i+1:i+25]['close']
@@ -131,34 +143,47 @@ class SimpleBacktest:
                     'losses': 0,
                     'win_rate': 0,
                     'avg_profit': 0,
+                    'avg_win': 0,
+                    'avg_loss': 0,
                     'max_drawdown': 0,
                     'best_trade': 0,
-                    'total_trades': 0
+                    'worst_trade': 0,
+                    'total_trades': 0,
+                    'total_return': 0,
+                    'equity_curve': []
                 }
             
             df_results = pd.DataFrame(results)
             wins = df_results['win'].sum()
+            losses = (~df_results['win']).sum()
             total = len(df_results)
-            
+
+            # Separate winning and losing trades
+            winning_trades = df_results[df_results['win']]
+            losing_trades = df_results[~df_results['win']]
+
             # Calculate equity curve
             cumulative_profit = (1 + df_results['profit_pct'] / 100).cumprod()
             equity_curve = initial_equity * cumulative_profit
-            
+
             # Calculate maximum drawdown
             peak = equity_curve.expanding().max()
             drawdown = (equity_curve - peak) / peak * 100
             max_drawdown = drawdown.min()
-            
+
             stats = {
                 'wins': int(wins),
-                'losses': int(total - wins),
+                'losses': int(losses),
                 'win_rate': (wins / total * 100) if total > 0 else 0,
                 'avg_profit': float(df_results['profit_pct'].mean()),
+                'avg_win': float(winning_trades['profit_pct'].mean()) if len(winning_trades) > 0 else 0,
+                'avg_loss': float(losing_trades['profit_pct'].mean()) if len(losing_trades) > 0 else 0,
                 'max_drawdown': float(max_drawdown),
                 'best_trade': float(df_results['profit_pct'].max()),
                 'worst_trade': float(df_results['profit_pct'].min()),
                 'total_trades': int(total),
-                'total_return': float((equity_curve.iloc[-1] / initial_equity - 1) * 100) if len(equity_curve) > 0 else 0
+                'total_return': float((equity_curve.iloc[-1] / initial_equity - 1) * 100) if len(equity_curve) > 0 else 0,
+                'equity_curve': equity_curve.tolist()  # Store equity curve for sparkline display
             }
             
             logger.info(f"Backtest completed: {stats['win_rate']:.1f}% win rate, {stats['total_trades']} trades")

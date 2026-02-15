@@ -17,13 +17,13 @@ from scripts.sentiment_analyzer import SentimentAnalyzer
 from scripts.utils import get_project_root, validate_config, load_config
 from scripts.coinglass_fetcher import CoinglassFetcher
 from scripts.crypto_news_fetcher import CryptoNewsFetcher
-# Detect if running in Azure Functions
-IS_AZURE_FUNCTIONS = os.getenv('FUNCTIONS_WORKER_RUNTIME') is not None or \
-                     os.getenv('WEBSITE_INSTANCE_ID') is not None
 
-# Setup logging - adapt for Azure Functions
-if IS_AZURE_FUNCTIONS:
-    # Azure Functions: Use only StreamHandler (logs go to Application Insights)
+# Detect if running in Google Cloud Run
+IS_CLOUD_RUN = os.getenv('K_SERVICE') is not None
+
+# Setup logging - adapt for Cloud Run
+if IS_CLOUD_RUN:
+    # Cloud Run: Use only StreamHandler (logs go to Cloud Logging)
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -73,7 +73,7 @@ def main():
         # ============================================
         # Step 1: Fetch Price Data from Binance
         # ============================================
-        logger.info("[1/6] Fetching cryptocurrency data from Binance...")
+        logger.info("[1/7] Fetching cryptocurrency data from Binance...")
         fetcher = CryptoDataFetcher(
             symbol=config['trading']['symbol']
         )
@@ -84,13 +84,31 @@ def main():
         # ============================================
         # Step 2: Calculate Technical Indicators
         # ============================================
-        logger.info("[2/7] Calculating technical indicators...")
+        logger.info("[2/7] Calculating technical indicators (with backtest)...")
         generator = SignalGenerator()
         df = generator.calculate_indicators(df)
         logger.info(f"✓ Technical indicators calculated (RSI, MACD, EMA, Bollinger Bands, OBV)")
 
+        # ============================================
+        # Step 7: Run Backtest for Win Rate
+        # ============================================
+        logger.info("[7/7] Running backtest for historical performance...")
+        backtest_stats = None
+        try:
+            from scripts.backtest import SimpleBacktest
+            backtest = SimpleBacktest()
+            backtest_stats = backtest.run_backtest(days=30)
+            if 'error' not in backtest_stats:
+                logger.info(f"✓ Backtest: {backtest_stats.get('win_rate', 0):.1f}% win rate ({backtest_stats.get('total_trades', 0)} trades)")
+            else:
+                logger.warning(f"⚠ Backtest failed: {backtest_stats.get('error')}")
+                backtest_stats = None
+        except Exception as e:
+            logger.warning(f"⚠ Backtest failed: {e}")
+            backtest_stats = None
+
         # Generate technical signal and strength (quant scoring model)
-        tech_signal = generator.calculate_signal_strength(df)
+        tech_signal = generator.calculate_signal_strength(df, backtest_stats=backtest_stats)
         logger.info(f"✓ Technical signal: {tech_signal.get('action')} | Strength: {tech_signal.get('strength')}/5")
 
         latest = df.iloc[-1]
@@ -98,7 +116,7 @@ def main():
         # ============================================
         # Step 3: Fetch Fear & Greed Index
         # ============================================
-        logger.info("[3/7] Fetching Fear & Greed Index...")
+        logger.info("[3/7] Fetching Fear & Greed Index (in parallel)...")
         analyzer = SentimentAnalyzer()
         fear_greed = None
         try:
@@ -111,7 +129,7 @@ def main():
         # ============================================
         # Step 4: Fetch Institutional Data (Coinglass)
         # ============================================
-        logger.info("[4/7] Fetching institutional data from Coinglass...")
+        logger.info("[4/7] Fetching institutional data (in parallel)...")
         institutional_data = None
         try:
             cg_fetcher = CoinglassFetcher()
@@ -125,7 +143,7 @@ def main():
         # ============================================
         # Step 5: Fetch Crypto News
         # ============================================
-        logger.info("[5/7] Fetching crypto news...")
+        logger.info("[5/7] Fetching crypto news (in parallel)...")
         news = []
         try:
             news_fetcher = CryptoNewsFetcher()
@@ -166,10 +184,10 @@ def main():
         # ============================================
         # Step 6: Analyze Sentiment with AI
         # ============================================
-        logger.info("[6/7] Analyzing sentiment with AI...")
+        logger.info("[6/7] Analyzing sentiment with Gemini AI...")
         sentiment = None
         try:
-            if fear_greed:
+            if fear_greed and len(news) > 0:
                 current_price_value = float(current_price['price'])
                 sentiment = analyzer.analyze_sentiment_with_ai(
                     fear_greed=fear_greed,
@@ -183,58 +201,19 @@ def main():
                     telegram_context['ai_advice_text'] = sentiment['ai_advice_text']
                 logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
             else:
-                logger.warning("⚠ Skipping AI analysis - Fear & Greed data unavailable")
+                logger.warning("⚠ Skipping AI analysis - Fear & Greed data unavailable or news data unavailable")
         except Exception as e:
             logger.warning(f"⚠ AI sentiment analysis failed: {e}")
             logger.warning("  Continuing with technical analysis only...")
         
         # ============================================
-        # Step 7: Run Backtest for Win Rate
-        # ============================================
-        logger.info("[7/7] Running backtest for historical performance...")
-        #todo: add backtest and fix logic later
-
-        # backtest_stats = None
-        # try:
-        #     from scripts.backtest import SimpleBacktest
-        #     backtest = SimpleBacktest()
-        #     backtest_stats = backtest.run_backtest(days=30)
-        #     logger.info(f"✓ Backtest: {backtest_stats.get('win_rate', 0):.1f}% win rate ({backtest_stats.get('total_trades', 0)} trades)")
-        # except Exception as e:
-        #     logger.warning(f"⚠ Backtest failed: {e}")
-        
-        # ============================================
-        # Step 8: Send Telegram Notification
+        # Step 7: Send Telegram Notification
         # ============================================
         logger.info("[7/7] Processing notification...")
         
-        # Create minimal signal dict from DataFrame for Telegram bot compatibility
-        current_price_value = float(current_price['price'])
-        
-        signal_dict = {
-            'action': tech_signal.get('action', 'HOLD'),
-            'strength': tech_signal.get('strength', 3),
-            'price': current_price_value,
-            'indicators': {
-                'rsi': float(latest['rsi']) if pd.notna(latest.get('rsi')) else None,
-                'macd': float(latest['macd']) if pd.notna(latest.get('macd')) else None,
-                'ema_12': float(latest['ema_12']) if pd.notna(latest.get('ema_12')) else None,
-                'ema_26': float(latest['ema_26']) if pd.notna(latest.get('ema_26')) else None,
-                'bb_upper': float(latest['bb_upper']) if pd.notna(latest.get('bb_upper')) else None,
-                'bb_middle': float(latest['bb_middle']) if pd.notna(latest.get('bb_middle')) else None,
-                'bb_lower': float(latest['bb_lower']) if pd.notna(latest.get('bb_lower')) else None,
-                'obv': float(latest['obv']) if pd.notna(latest.get('obv')) else None,
-                'volume_change': float(latest['volume_change']) if pd.notna(latest.get('volume_change')) else 0.0,
-                'adx': float(latest['adx']) if pd.notna(latest.get('adx')) else None,
-                'stoch_k': float(latest['stoch_k']) if pd.notna(latest.get('stoch_k')) else None,
-                'stoch_d': float(latest['stoch_d']) if pd.notna(latest.get('stoch_d')) else None,
-                'volume_ma_20': float(latest['volume_ma_20']) if pd.notna(latest.get('volume_ma_20')) else None,
-                'support': float(latest['support']) if pd.notna(latest.get('support')) else None,
-                'obv_trend': tech_signal.get('obv_trend'),
-                'near_support': tech_signal.get('near_support'),
-                'bouncing': tech_signal.get('bouncing')
-            }
-        }
+        # Build Telegram context (sentiment section)
+        # This is now simplified since tech_signal already has all indicators
+        telegram_context['backtest_stats'] = backtest_stats
         
         should_notify = True
         
@@ -243,7 +222,7 @@ def main():
                 notifier = TelegramNotifier()
                 asyncio.run(notifier.send_signal(
                     signal=tech_signal,
-                    sentiment=telegram_context,
+                    sentiment=telegram_context
                 ))
                 logger.info("✓ Signal sent to Telegram!")
             except Exception as e:
@@ -271,11 +250,12 @@ def main():
             } if institutional_data else None,
             'crypto_news': [n.get('title') for n in news[:3]] if news else [],
             'ai_advice': sentiment.get('ai_advice_text') if sentiment else None,
-            'telegram_payload': telegram_context,
-            # 'backtest': {
-            #     'win_rate': backtest_stats.get('win_rate') if backtest_stats else None,
-            #     'total_trades': backtest_stats.get('total_trades') if backtest_stats else None
-            # } if backtest_stats else None,
+            'backtest': {
+                'win_rate': backtest_stats.get('win_rate') if backtest_stats else None,
+                'total_trades': backtest_stats.get('total_trades') if backtest_stats else None,
+                'avg_win': backtest_stats.get('avg_win') if backtest_stats else None,
+                'avg_loss': backtest_stats.get('avg_loss') if backtest_stats else None
+            } if backtest_stats else None,
             'notification_sent': should_notify,
             'timestamp': str(df.iloc[-1]['timestamp']) if 'timestamp' in df.columns else None
         }
@@ -299,8 +279,8 @@ def main():
 
 if __name__ == "__main__":
     # Ensure logs directory exists (only for local execution)
-    if not IS_AZURE_FUNCTIONS:
+    if not IS_CLOUD_RUN:
         log_dir = get_project_root() / 'logs'
         log_dir.mkdir(exist_ok=True)
-    
+
     sys.exit(main())

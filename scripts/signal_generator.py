@@ -67,7 +67,11 @@ class SignalGenerator:
         ema_period_long = self.config['indicators'].get('ema_long', 26)
         df['ema_12'] = df['close'].ewm(span=ema_period_short, adjust=False).mean()
         df['ema_26'] = df['close'].ewm(span=ema_period_long, adjust=False).mean()
-        
+
+        # EMA-50 and EMA-200 for trend analysis
+        df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+        df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+
         # Bollinger Bands
         bb_period = self.config['indicators'].get('bb_period', 20)
         bb_std = self.config['indicators'].get('bb_std', 2)
@@ -94,6 +98,7 @@ class SignalGenerator:
         ], axis=1).max(axis=1)
 
         atr = tr.rolling(window=adx_period, min_periods=adx_period).mean()
+        df['atr'] = atr  # Store ATR in DataFrame
         plus_dm_series = pd.Series(plus_dm, index=df.index)
         minus_dm_series = pd.Series(minus_dm, index=df.index)
         plus_di = 100 * plus_dm_series.rolling(window=adx_period, min_periods=adx_period).mean() / atr
@@ -122,7 +127,10 @@ class SignalGenerator:
 
         # Support level (rolling 20-period low)
         df['support'] = df['low'].rolling(window=20, min_periods=1).min()
-        
+
+        # Resistance level (rolling 20-period high)
+        df['resistance'] = df['high'].rolling(window=20, min_periods=1).max()
+
         # Volume change percentage (7-day average)
         df['volume_change'] = 0.0
         if len(df) >= 7:
@@ -137,10 +145,14 @@ class SignalGenerator:
         
         return df
 
-    def calculate_signal_strength(self, df: pd.DataFrame) -> Dict:
+    def calculate_signal_strength(self, df: pd.DataFrame, backtest_stats: Optional[Dict] = None) -> Dict:
         """
         Professional-grade signal calculator with entry/exit prices and risk management.
-        
+
+        Args:
+            df: DataFrame with calculated indicators
+            backtest_stats: Optional backtest statistics for real win rate calculation
+
         Returns:
             Comprehensive trading plan with entries, exits, position sizing, and risk metrics.
         """
@@ -422,12 +434,14 @@ class SignalGenerator:
                 bb_lower=bb_lower,
                 rsi=rsi,
                 adx=adx,
-                df=df
+                df=df,
+                backtest_stats=backtest_stats
             )
         
         return {
             'action': action,
             'strength': strength,
+            'price': price,
             'score': round(adjusted_score, 2),
             'raw_score': round(total_score, 2),
             'direction_score': direction_score,
@@ -442,12 +456,32 @@ class SignalGenerator:
                 'volume': round(volume_score, 1),
                 'technical': round(technical_score, 1)
             },
+            'indicators': {
+                'ema_12': ema_12,
+                'ema_26': ema_26,
+                'ema_50': ema_50,
+                'ema_200': ema_200,
+                'adx': adx,
+                'rsi': rsi,
+                'stoch_k': stoch_k,
+                'stoch_d': stoch_d,
+                'bb_upper': bb_upper,
+                'bb_middle': bb_middle,
+                'bb_lower': bb_lower,
+                'support': support,
+                'resistance': resistance,
+                'atr': atr,
+                'obv': obv,
+                'volume': volume,
+                'volume_ma_20': volume_ma_20,
+                'volume_change': float(latest.get('volume_change', 0) or 0)
+            },
             'trade_plan': trade_plan
         }
 
 
-    def _calculate_trade_plan(self, action, strength, price, atr, support, resistance, 
-                            bb_upper, bb_middle, bb_lower, rsi, adx, df) -> Dict:
+    def _calculate_trade_plan(self, action, strength, price, atr, support, resistance,
+                            bb_upper, bb_middle, bb_lower, rsi, adx, df, backtest_stats=None) -> Dict:
         """
         Calculate comprehensive trade plan with entries, exits, and risk management.
         
@@ -607,24 +641,41 @@ class SignalGenerator:
             # 5. 倉位建議 (Position Sizing)
             # ----------------
             # 凱利公式簡化版：f = (勝率 × 報酬 - 敗率) / 報酬
-            
-            # 根據強度估算勝率
-            win_rate_map = {5: 0.65, 4: 0.58, 3: 0.52, 2: 0.48, 1: 0.42}
-            estimated_win_rate = win_rate_map.get(strength, 0.50)
-            
-            # 計算建議倉位
-            if rr_ratios['T2'] > 0:
-                kelly_fraction = (estimated_win_rate * rr_ratios['T2'] - (1 - estimated_win_rate)) / rr_ratios['T2']
-                kelly_fraction = max(0, min(kelly_fraction, 0.25))  # 限制0-25%
+
+            # Use actual backtest data if available
+            kelly_source = "強度估算 (無回測)"
+            if backtest_stats and backtest_stats.get('win_rate') and backtest_stats.get('avg_win') and backtest_stats.get('avg_loss'):
+                actual_win_rate = backtest_stats['win_rate'] / 100
+                avg_win = backtest_stats['avg_win']
+                avg_loss = abs(backtest_stats['avg_loss'])
+
+                if avg_loss > 0:
+                    b = avg_win / avg_loss  # Reward/Risk ratio
+                    kelly_fraction = (actual_win_rate * b - (1 - actual_win_rate)) / b
+                else:
+                    kelly_fraction = 0.10  # Default if no losses
+
+                kelly_source = f"回測勝率 {backtest_stats['win_rate']:.1f}%"
             else:
-                kelly_fraction = 0
-            
+                # Fallback to strength-based estimates
+                win_rate_map = {5: 0.65, 4: 0.58, 3: 0.52, 2: 0.48, 1: 0.42}
+                estimated_win_rate = win_rate_map.get(strength, 0.50)
+
+                if rr_ratios['T2'] > 0:
+                    kelly_fraction = (estimated_win_rate * rr_ratios['T2'] - (1 - estimated_win_rate)) / rr_ratios['T2']
+                else:
+                    kelly_fraction = 0
+
+            # LOW-RISK BTC: Half-Kelly with 15% hard cap
+            kelly_fraction = max(0, min(kelly_fraction * 0.5, 0.15))
+
             position_sizing = {
                 'kelly_fraction': round(kelly_fraction, 3),  # 凱利建議
                 'conservative': round(kelly_fraction * 0.5, 3),  # 半凱利
                 'aggressive': round(kelly_fraction * 1.5, 3),  # 1.5倍凱利
-                'max_risk_percent': 2.0,  # 單筆最大風險2%
-                'recommended': None
+                'max_risk_percent': 1.5,  # 單筆最大風險1.5%（低風險BTC）
+                'recommended': None,
+                'kelly_source': kelly_source  # Track data source
             }
             
             # 根據強度決定
@@ -754,21 +805,39 @@ class SignalGenerator:
                 'T3': round(reward_T3 / risk, 2) if risk > 0 else 0,
             }
             
-            win_rate_map = {5: 0.60, 4: 0.55, 3: 0.50, 2: 0.45, 1: 0.40}
-            estimated_win_rate = win_rate_map.get(strength, 0.48)
-            
-            if rr_ratios['T2'] > 0:
-                kelly_fraction = (estimated_win_rate * rr_ratios['T2'] - (1 - estimated_win_rate)) / rr_ratios['T2']
-                kelly_fraction = max(0, min(kelly_fraction, 0.20))
+            # Use actual backtest data if available (same as BUY)
+            kelly_source = "強度估算 (無回測)"
+            if backtest_stats and backtest_stats.get('win_rate') and backtest_stats.get('avg_win') and backtest_stats.get('avg_loss'):
+                actual_win_rate = backtest_stats['win_rate'] / 100
+                avg_win = backtest_stats['avg_win']
+                avg_loss = abs(backtest_stats['avg_loss'])
+
+                if avg_loss > 0:
+                    b = avg_win / avg_loss
+                    kelly_fraction = (actual_win_rate * b - (1 - actual_win_rate)) / b
+                else:
+                    kelly_fraction = 0.10
+
+                kelly_source = f"回測勝率 {backtest_stats['win_rate']:.1f}%"
             else:
-                kelly_fraction = 0
-            
+                win_rate_map = {5: 0.60, 4: 0.55, 3: 0.50, 2: 0.45, 1: 0.40}
+                estimated_win_rate = win_rate_map.get(strength, 0.48)
+
+                if rr_ratios['T2'] > 0:
+                    kelly_fraction = (estimated_win_rate * rr_ratios['T2'] - (1 - estimated_win_rate)) / rr_ratios['T2']
+                else:
+                    kelly_fraction = 0
+
+            # LOW-RISK BTC: Half-Kelly with 15% hard cap
+            kelly_fraction = max(0, min(kelly_fraction * 0.5, 0.15))
+
             position_sizing = {
                 'kelly_fraction': round(kelly_fraction, 3),
                 'conservative': round(kelly_fraction * 0.5, 3),
-                'aggressive': round(kelly_fraction * 1.2, 3),
+                'aggressive': round(kelly_fraction * 1.5, 3),
                 'max_risk_percent': 1.5,
-                'recommended': None
+                'recommended': None,
+                'kelly_source': kelly_source
             }
             
             if strength >= 4:
