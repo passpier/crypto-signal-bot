@@ -18,6 +18,8 @@ from scripts.utils import get_project_root, validate_config, load_config
 from scripts.coinglass_fetcher import CoinglassFetcher
 from scripts.crypto_news_fetcher import CryptoNewsFetcher
 
+import argparse
+
 # Detect if running in Google Cloud Run
 IS_CLOUD_RUN = os.getenv('K_SERVICE') is not None
 
@@ -46,6 +48,11 @@ else:
 logger = logging.getLogger(__name__)
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Crypto Signal Bot')
+    parser.add_argument('--dry-run', action='store_true', help='Run without sending Telegram notifications')
+    return parser.parse_args()
+
 def main():
     """
     Main execution function with combined technical + sentiment analysis.
@@ -59,6 +66,8 @@ def main():
     6. Combine technical + sentiment for final recommendation
     7. Send enhanced Telegram notification
     """
+    args = parse_arguments()
+
     try:
         # Validate configuration
         config = load_config()
@@ -73,26 +82,35 @@ def main():
         # ============================================
         # Step 1: Fetch Price Data from Binance
         # ============================================
-        logger.info("[1/7] Fetching cryptocurrency data from Binance...")
+        logger.info("[1/8] Fetching cryptocurrency data from Binance...")
         fetcher = CryptoDataFetcher(
             symbol=config['trading']['symbol']
         )
-        df = fetcher.fetch_historical_data(days=30)
+        
+        # Determine days based on interval to respect API limits (1000 candles max)
+        interval = config['trading'].get('interval', '1h')
+        days_to_fetch = 30
+        if interval == '15m':
+            days_to_fetch = 5  # 5 * 96 = 480 candles
+        elif interval == '5m':
+            days_to_fetch = 2  # 2 * 288 = 576 candles
+            
+        df = fetcher.fetch_historical_data(days=days_to_fetch, interval=interval)
         current_price = fetcher.fetch_current_price()
         logger.info(f"✓ Fetched {len(df)} data points | Current: ${current_price['price']:,.2f}")
         
         # ============================================
         # Step 2: Calculate Technical Indicators
         # ============================================
-        logger.info("[2/7] Calculating technical indicators (with backtest)...")
+        logger.info("[2/8] Calculating technical indicators (with backtest)...")
         generator = SignalGenerator()
         df = generator.calculate_indicators(df)
         logger.info(f"✓ Technical indicators calculated (RSI, MACD, EMA, Bollinger Bands, OBV)")
 
         # ============================================
-        # Step 7: Run Backtest for Win Rate
+        # Step 3: Run Backtest for Win Rate
         # ============================================
-        logger.info("[7/7] Running backtest for historical performance...")
+        logger.info("[3/8] Running backtest for historical performance...")
         backtest_stats = None
         try:
             from scripts.backtest import SimpleBacktest
@@ -114,9 +132,9 @@ def main():
         latest = df.iloc[-1]
         
         # ============================================
-        # Step 3: Fetch Fear & Greed Index
+        # Step 4: Fetch Fear & Greed Index
         # ============================================
-        logger.info("[3/7] Fetching Fear & Greed Index (in parallel)...")
+        logger.info("[4/8] Fetching Fear & Greed Index (in parallel)...")
         analyzer = SentimentAnalyzer()
         fear_greed = None
         try:
@@ -127,9 +145,9 @@ def main():
         
 
         # ============================================
-        # Step 4: Fetch Institutional Data (Coinglass)
+        # Step 5: Fetch Institutional Data (Coinglass)
         # ============================================
-        logger.info("[4/7] Fetching institutional data (in parallel)...")
+        logger.info("[5/8] Fetching institutional data (in parallel)...")
         institutional_data = None
         try:
             cg_fetcher = CoinglassFetcher()
@@ -141,9 +159,9 @@ def main():
             logger.warning(f"⚠ Failed to fetch Coinglass data: {e}")
 
         # ============================================
-        # Step 5: Fetch Crypto News
+        # Step 6: Fetch Crypto News
         # ============================================
-        logger.info("[5/7] Fetching crypto news (in parallel)...")
+        logger.info("[6/8] Fetching crypto news (in parallel)...")
         news = []
         try:
             news_fetcher = CryptoNewsFetcher()
@@ -182,9 +200,9 @@ def main():
         }
         
         # ============================================
-        # Step 6: Analyze Sentiment with AI
+        # Step 7: Analyze Sentiment with AI
         # ============================================
-        logger.info("[6/7] Analyzing sentiment with Gemini AI...")
+        logger.info("[7/8] Analyzing sentiment with Gemini AI...")
         sentiment = None
         try:
             if fear_greed and len(news) > 0:
@@ -207,15 +225,15 @@ def main():
             logger.warning("  Continuing with technical analysis only...")
         
         # ============================================
-        # Step 7: Send Telegram Notification
+        # Step 8: Send Telegram Notification
         # ============================================
-        logger.info("[7/7] Processing notification...")
+        logger.info("[8/8] Processing notification...")
         
         # Build Telegram context (sentiment section)
         # This is now simplified since tech_signal already has all indicators
         telegram_context['backtest_stats'] = backtest_stats
         
-        should_notify = True
+        should_notify = not args.dry_run
         
         if should_notify:
             try:

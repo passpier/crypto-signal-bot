@@ -40,7 +40,8 @@ class SignalGenerator:
         df = df.copy()
         
         # Ensure we have enough data
-        if len(df) < 200:
+        # Note: For 1H data, 200 candles is ~8.3 days.
+        if len(df) < 50:
             logger.warning(f"Limited data points ({len(df)}). Some indicators may be NaN.")
         
         # RSI calculation
@@ -255,6 +256,15 @@ class SignalGenerator:
         # ============================================
         volume_score = 0
         
+        # High volatility / Panic adjustments
+        is_panic = False
+        if price > 0 and pd.notna(atr):
+             atr_percent_val = (atr / price * 100)
+             # Require BOTH high volatility AND extreme RSI, OR extremely high volatility
+             is_panic = (atr_percent_val > 3.0 and (rsi < 30 or rsi > 70)) or (atr_percent_val > 5.0)
+        else:
+             is_panic = False # Default to false if no ATR
+        
         obv_trend = 'flat'
         if len(df) >= 20:
             obv_ma = df['obv'].rolling(20).mean().iloc[-1]
@@ -287,20 +297,21 @@ class SignalGenerator:
         # 4. TECHNICAL SCORE (0-100)
         # ============================================
         technical_score = 0
+        atr_percent = 0 # Initialize here
         
         near_support = False
         near_resistance = False
         bouncing = price > float(prev.get('close', price) or price)
         
         if support > 0:
-            near_support = price <= support * 1.02
+            near_support = price <= support * 1.005
             if near_support and bouncing:
                 technical_score += 50
             elif near_support:
                 technical_score += 30
         
         if resistance > 0:
-            near_resistance = price >= resistance * 0.98
+            near_resistance = price >= resistance * 0.995
             if near_resistance and not bouncing:
                 technical_score += 20
         
@@ -313,11 +324,12 @@ class SignalGenerator:
                 elif 0.6 <= position <= 0.8:
                     technical_score += 15
         
-        atr_percent = (atr / price * 100) if price > 0 else 0
-        if atr_percent > 2.0:
-            technical_score += 20
-        elif atr_percent > 1.0:
-            technical_score += 15
+        if price > 0 and pd.notna(atr):
+            atr_percent = (atr / price * 100)
+            if atr_percent > 2.0:
+                technical_score += 20
+            elif atr_percent > 1.0:
+                technical_score += 15
 
         # ============================================
         # 5. WEIGHTED TOTAL SCORE
@@ -336,14 +348,19 @@ class SignalGenerator:
         # ============================================
         risk_factor = 1.0
         
-        if volume_ma_20 > 0 and volume < volume_ma_20 * 0.5:
-            risk_factor *= 0.8
+        # In panic mode, we want to trade the volatility, not penalize it
+        if not is_panic:
+             if volume_ma_20 > 0 and volume < volume_ma_20 * 0.5:
+                risk_factor *= 0.8
         
-        if adx < 15:
-            risk_factor *= 0.85
+             if adx < 15:
+                risk_factor *= 0.85
         
-        if atr_percent > 5.0:
-            risk_factor *= 0.75
+             if atr_percent > 5.0:
+                risk_factor *= 0.75
+        else:
+             # In panic mode, slightly boost risk factor for opportunities
+             risk_factor *= 1.2
         
         adjusted_score = total_score * risk_factor
         
@@ -400,20 +417,39 @@ class SignalGenerator:
         # 9. ACTION DECISION
         # ============================================
         action = 'HOLD'
-        min_volatility = 1.0
+        min_volatility = 0.5
         
-        if direction_score >= 3 and strength >= 4 and atr_percent >= min_volatility:
+        # Panic Strategy: Relax requirements for high volatility opportunities
+        strength_threshold = 3 if is_panic else 4
+        direction_threshold = 2 if is_panic else 3
+        
+        if direction_score >= direction_threshold and strength >= strength_threshold and atr_percent >= min_volatility:
             action = 'BUY'
-        elif direction_score <= -3 and strength >= 4 and atr_percent >= min_volatility:
+        elif direction_score <= -direction_threshold and strength >= strength_threshold and atr_percent >= min_volatility:
             action = 'SELL'
+        
+        # Original logic as fallback/conservative
         elif direction_score >= 4 and strength >= 3:
             action = 'BUY'
         elif direction_score <= -4 and strength >= 3:
             action = 'SELL'
+            
+        # Panic Reversal Logic (Catch the knife with confirmation)
+        if is_panic and action == 'HOLD':
+             # Oversold bounce - Require RSI < 25 (deeper) and stronger bounce
+             if rsi < 25 and price > float(latest.get('open', price)) and price > float(prev.get('close', price)):
+                 action = 'BUY'
+                 strength = 4
+                 logger.info("Panic Buy Triggered: Deep Oversold Bounce")
+             # Overbought dump - Require RSI > 75 (higher) and stronger dump
+             elif rsi > 75 and price < float(latest.get('open', price)) and price < float(prev.get('close', price)):
+                 action = 'SELL'
+                 strength = 4
+                 logger.info("Panic Sell Triggered: Extreme Overbought Dump")
         
-        if action == 'BUY' and near_resistance:
+        if action == 'BUY' and near_resistance and not is_panic:
             action = 'HOLD'
-        elif action == 'SELL' and near_support and bouncing:
+        elif action == 'SELL' and near_support and bouncing and not is_panic:
             action = 'HOLD'
         
         # ============================================

@@ -33,11 +33,18 @@ class SimpleBacktest:
         Returns:
             Dictionary with backtest statistics
         """
-        logger.info(f"Starting backtest with {days} days of data")
+        # Determine interval from config
+        interval = self.generator.config['trading'].get('interval', '1h')
+        
+        # Adjust days based on interval to avoid API limits (1000 candles)
+        if interval == '15m':
+            days = min(days, 5) # Max 5 days for 15m
+        
+        logger.info(f"Starting backtest with {days} days of data ({interval} interval)")
         
         try:
             # Fetch and prepare data
-            df = self.fetcher.fetch_historical_data(days=days)
+            df = self.fetcher.fetch_historical_data(days=days, interval=interval)
             df = self.generator.calculate_indicators(df)
             
             if len(df) < 200:
@@ -63,8 +70,8 @@ class SimpleBacktest:
             initial_equity = 10000  # Starting capital
             
             # Simulate trading day by day
-            # Start from index 200 to ensure MA200 is calculated
-            for i in range(200, len(df) - 24):  # Leave 24 hours for future price check
+            # Start from index 50 to ensure indicators are calculated
+            for i in range(50, len(df) - 24):  # Leave 24 hours for future price check
                 try:
                     window_df = df.iloc[:i+1].copy()
                     signal = self.generator.calculate_signal_strength(window_df)

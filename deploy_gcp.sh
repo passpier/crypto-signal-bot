@@ -11,6 +11,7 @@ PROJECT_ID="${1:-crypto-signal-bot-prod}"
 REGION="${2:-asia-east1}"
 SERVICE_NAME="${3:-crypto-signal-bot}"
 SCHEDULER_JOB_NAME="${SERVICE_NAME}-scheduler"
+SCHEDULER_SA_NAME="${SERVICE_NAME}-scheduler-sa"
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 0 * * *}"  # Daily at midnight UTC
 TIMEZONE="${TIMEZONE:-Asia/Taipei}"
 
@@ -48,12 +49,12 @@ gcloud run deploy "$SERVICE_NAME" \
     --source . \
     --platform managed \
     --region "$REGION" \
-    --allow-unauthenticated \
     --timeout 600 \
     --memory 512Mi \
     --cpu 1 \
     --min-instances 0 \
-    --max-instances 1
+    --max-instances 1 \
+    --no-allow-unauthenticated
 
 # Get the service URL
 echo ""
@@ -68,17 +69,17 @@ echo "✓ Service deployed: $SERVICE_URL"
 echo ""
 echo "Setting up Cloud Scheduler job..."
 
-# Get the default compute service account
-SERVICE_ACCOUNT=$(gcloud iam service-accounts list \
-    --filter="displayName:Compute Engine default service account" \
-    --format="value(email)" | head -1)
+# Create or get scheduler service account
+SERVICE_ACCOUNT="${SCHEDULER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-if [ -z "$SERVICE_ACCOUNT" ]; then
-    echo "Error: Could not find default service account"
-    exit 1
+# Check if service account exists
+if gcloud iam service-accounts describe "$SERVICE_ACCOUNT" &> /dev/null; then
+    echo "Using existing service account: $SERVICE_ACCOUNT"
+else
+    echo "Creating scheduler service account: $SERVICE_ACCOUNT"
+    gcloud iam service-accounts create "$SCHEDULER_SA_NAME" \
+        --display-name "Service account for Cloud Scheduler to invoke Cloud Run"
 fi
-
-echo "Using service account: $SERVICE_ACCOUNT"
 
 # Grant Cloud Run Invoker permission
 echo "Granting Cloud Run Invoker role..."
@@ -86,12 +87,20 @@ gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
     --region "$REGION" \
     --member "serviceAccount:$SERVICE_ACCOUNT" \
     --role "roles/run.invoker" \
-    --quiet 2>/dev/null || true
+    --quiet
+
+if [ $? -ne 0 ]; then
+    echo "❌ Error: Failed to grant Cloud Run Invoker role to $SERVICE_ACCOUNT"
+    exit 1
+fi
 
 # Delete existing scheduler job if it exists
-gcloud scheduler jobs delete "$SCHEDULER_JOB_NAME" \
-    --location "$REGION" \
-    --quiet 2>/dev/null || true
+if gcloud scheduler jobs describe "$SCHEDULER_JOB_NAME" --location "$REGION" &> /dev/null; then
+    echo "Deleting existing scheduler job..."
+    gcloud scheduler jobs delete "$SCHEDULER_JOB_NAME" \
+        --location "$REGION" \
+        --quiet
+fi
 
 # Create new scheduler job
 gcloud scheduler jobs create http "$SCHEDULER_JOB_NAME" \
@@ -117,16 +126,12 @@ echo "   gcloud run services update $SERVICE_NAME \\"
 echo "     --region=$REGION \\"
 echo "     --update-env-vars TELEGRAM_TOKEN=your_token,TELEGRAM_CHAT_ID=your_chat_id,GEMINI_API_KEY=your_key"
 echo ""
-echo "2. Test the health endpoint:"
-echo "   curl $SERVICE_URL/health"
+echo "2. Manually trigger the bot (using Cloud Scheduler):"
+echo "   gcloud scheduler jobs run $SCHEDULER_JOB_NAME --location=$REGION"
 echo ""
-echo "3. Manually trigger the bot:"
-echo "   curl -X POST $SERVICE_URL/trigger \\"
-echo "     -H 'Authorization: Bearer \$(gcloud auth print-identity-token)'"
+echo "3. Monitor logs:"
+echo "   gcloud run services logs read $SERVICE_NAME --limit=100"
 echo ""
-echo "4. Monitor logs:"
-echo "   gcloud run logs read --service=$SERVICE_NAME --limit=100"
-echo ""
-echo "5. Check scheduler job:"
+echo "4. Check scheduler job status:"
 echo "   gcloud scheduler jobs describe $SCHEDULER_JOB_NAME --location=$REGION"
 echo ""

@@ -249,8 +249,7 @@ insufficient or conviction is low, recommend HOLD instead of forcing a trade.
 == Output format(exact) ==
 分類：極度超賣反彈/趨勢突破/盤整震盪/反轉/無明確
 訊號: BUY/SELL/HOLD
-理由: 技術面／情緒面／機構面／新聞面各1點，並總結，200字內  
-風險: [本次獨特風險點]
+理由: 技術面／情緒面／機構面／新聞面各1點，並總結，200字內
             """
             logger.info(f"Prompt message: {prompt}")
             # Use google-generativeai directly
