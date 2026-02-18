@@ -93,44 +93,37 @@ An automated cryptocurrency trading signal bot that combines **technical analysi
 
 **Why It Works**: Markets are driven by human emotions. Panic selling creates opportunity; euphoria creates risk.
 
-### Simplified Telegram Message Format
+### Telegram Message Example
 
 ```
 
-🟡 BTC 觀望訊號 (3/5)
-
-價格資訊
-現價: $78,478
-入場: $77,500-$78,000
-目標: $80,500 (+3.2%)
-停損: $76,800 (-2.1%)
-風報比: 1:1.5
-━━━━━━━━━━━━━━━━
+🟢 BTC 買入  ★★★★★ (5/5)
+💰 現價: $78,478  |  ATR 2.3%
+─────────────────
+▸ 入場  $77,800 – $78,200  (保守優先)
+▸ 停損  $75,500  ← 硬停損
+▸ 目標  T1 $82,000  RR 1.6  |  T2 $86,000  RR 3.2  |  T3 $91,000
+▸ 倉位  10.0%  (Kelly: 12.3%)
+─────────────────
+📌 理由: 技術指標（RSI、MACD、OBV）普遍偏空，但ETF資金流入顯示機構看多
+─────────────────
 技術指標
-RSI 55 | MACD 多頭
-恐懼指數: 17/100 (Extreme Fear)
-成交量: -65%
+【趨勢】EMA 多頭排列 | ADX 28.3 (強趨勢)
+【動能】RSI 22 (超賣) | 隨機 28↘35 (死叉)
+【位置】布林 中軌 | 支撐 76,500 | 壓力 81,000
+【量能】成交量 +45% | OBV 上升
+─────────────────
+市場情緒
+Fear & Greed  17/100 — Extreme Fear
+ETF 淨流 +320M  |  多空比 0.85  |  Funding +0.010%
 
-機構數據
-ETF 淨流: $-493M
-多空比: 2.67
-━━━━━━━━━━━━━━━━
-💡 分析理由
-極度恐懼但ETF流出，RSI中性MACD轉多，技術面未破位但機構觀望
-📋 倉位管理
-20%輕倉試探，分3批進場，每批間隔1H
-⚠️ 風險提示
-跌破76500確認空頭，目標74000
+• Bitcoin faces macro headwinds...
+• Institutional ETF inflows hit weekly high
+─────────────────
+🤖 AI 分析
+理由: ...narrative only, no duplicate fields...
 
 ```
-
-**Message includes:**
-- Entry/target/stop with risk-reward ratio
--  Technical indicators with emoji signals
--  Institutional data (ETF flows, long/short ratio)
-- AI-synthesized analysis combining all factors
-- Position sizing and batch strategy
-- Specific price-based risk scenarios
 
 ## 📋 Prerequisites
 

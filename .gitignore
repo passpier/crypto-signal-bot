@@ -44,3 +44,4 @@ config/config.yaml
 
 .agents
 .cursor
+config_gcp.sh
