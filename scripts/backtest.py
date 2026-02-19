@@ -15,9 +15,74 @@ from scripts.data_fetcher import CryptoDataFetcher
 logger = logging.getLogger(__name__)
 
 
+def _simulate_trade(action: str, entry_price: float, stop_loss: float,
+                    take_profit: float, future_prices: pd.Series):
+    """
+    Simulate a single trade.
+
+    Returns (profit_pct, exit_pos) where exit_pos is the 0-based position
+    within future_prices at which the trade exits.  Returns None for
+    misconfigured signals that should be skipped.
+
+    Uses numpy positional argmax (not pandas idxmax) so the result is always
+    a plain integer regardless of the DataFrame's index type.
+    """
+    vals = future_prices.to_numpy()
+
+    if action == 'BUY':
+        if stop_loss >= entry_price or take_profit <= entry_price:
+            return None  # misconfigured signal – skip
+
+        sl_mask = vals < stop_loss
+        tp_mask = vals > take_profit
+        hit_sl = sl_mask.any()
+        hit_tp = tp_mask.any()
+
+        if hit_sl and hit_tp:
+            sl_pos = sl_mask.argmax()
+            tp_pos = tp_mask.argmax()
+            if sl_pos <= tp_pos:
+                exit_price, exit_pos = stop_loss, sl_pos
+            else:
+                exit_price, exit_pos = take_profit, tp_pos
+        elif hit_sl:
+            exit_price, exit_pos = stop_loss, sl_mask.argmax()
+        elif hit_tp:
+            exit_price, exit_pos = take_profit, tp_mask.argmax()
+        else:
+            exit_price, exit_pos = vals[-1], len(vals) - 1
+
+        return (exit_price / entry_price - 1) * 100, exit_pos
+
+    else:  # SELL (short)
+        if stop_loss <= entry_price or take_profit >= entry_price:
+            return None  # misconfigured signal – skip
+
+        sl_mask = vals > stop_loss
+        tp_mask = vals < take_profit
+        hit_sl = sl_mask.any()
+        hit_tp = tp_mask.any()
+
+        if hit_sl and hit_tp:
+            sl_pos = sl_mask.argmax()
+            tp_pos = tp_mask.argmax()
+            if sl_pos <= tp_pos:
+                exit_price, exit_pos = stop_loss, sl_pos
+            else:
+                exit_price, exit_pos = take_profit, tp_pos
+        elif hit_sl:
+            exit_price, exit_pos = stop_loss, sl_mask.argmax()
+        elif hit_tp:
+            exit_price, exit_pos = take_profit, tp_mask.argmax()
+        else:
+            exit_price, exit_pos = vals[-1], len(vals) - 1
+
+        return (entry_price / exit_price - 1) * 100, exit_pos
+
+
 class SimpleBacktest:
     """Simple backtesting engine for trading signals."""
-    
+
     def __init__(self):
         """Initialize backtest engine."""
         self.generator = SignalGenerator()
@@ -68,10 +133,20 @@ class SimpleBacktest:
             results = []
             equity_curve = []
             initial_equity = 10000  # Starting capital
-            
-            # Simulate trading day by day
+            position_open = False   # True while a trade is active
+            exit_bar = -1           # df row index when the open trade exits
+
+            # Simulate trading bar by bar
             # Start from index 50 to ensure indicators are calculated
-            for i in range(50, len(df) - 24):  # Leave 24 hours for future price check
+            for i in range(50, len(df) - 24):  # Leave 24 bars for future price check
+                # Release position once we've moved past its exit bar
+                if position_open and i > exit_bar:
+                    position_open = False
+
+                # Skip this bar if a trade is still open
+                if position_open:
+                    continue
+
                 try:
                     window_df = df.iloc[:i+1].copy()
                     signal = self.generator.calculate_signal_strength(window_df)
@@ -88,47 +163,31 @@ class SimpleBacktest:
                         targets = trade_plan.get('targets', {})
                         stop_loss = stops.get('hard_stop', 0)
                         take_profit = targets.get('T2', 0)
-                        
+
+                        # Skip trades with missing/invalid price levels
+                        if stop_loss <= 0 or take_profit <= 0:
+                            continue
+
                         # Check future prices (next 24 hours)
                         future_prices = df.iloc[i+1:i+25]['close']
-                        
+
                         if len(future_prices) == 0:
                             continue
-                        
-                        if signal['action'] == 'BUY':
-                            # Check if stop loss or take profit is hit
-                            hit_stop_loss = (future_prices < stop_loss).any()
-                            hit_take_profit = (future_prices > take_profit).any()
-                            
-                            if hit_stop_loss:
-                                # Find when stop loss was hit
-                                stop_loss_idx = (future_prices < stop_loss).idxmax()
-                                exit_price = stop_loss
-                                profit_pct = (stop_loss / entry_price - 1) * 100
-                            elif hit_take_profit:
-                                # Find when take profit was hit
-                                take_profit_idx = (future_prices > take_profit).idxmax()
-                                exit_price = take_profit
-                                profit_pct = (take_profit / entry_price - 1) * 100
-                            else:
-                                # Exit at last available price
-                                exit_price = future_prices.iloc[-1]
-                                profit_pct = (exit_price / entry_price - 1) * 100
-                        else:  # SELL (short)
-                            # Reverse logic for short positions
-                            hit_stop_loss = (future_prices > stop_loss).any()
-                            hit_take_profit = (future_prices < take_profit).any()
-                            
-                            if hit_stop_loss:
-                                exit_price = stop_loss
-                                profit_pct = (entry_price / stop_loss - 1) * 100
-                            elif hit_take_profit:
-                                exit_price = take_profit
-                                profit_pct = (entry_price / take_profit - 1) * 100
-                            else:
-                                exit_price = future_prices.iloc[-1]
-                                profit_pct = (entry_price / exit_price - 1) * 100
-                        
+
+                        result = _simulate_trade(
+                            signal['action'], entry_price, stop_loss,
+                            take_profit, future_prices
+                        )
+
+                        # None means the signal was misconfigured – skip
+                        if result is None:
+                            continue
+
+                        profit_pct, exit_pos = result
+                        exit_bar = i + 1 + exit_pos  # absolute df row of trade exit
+                        position_open = True
+                        exit_price = entry_price * (1 + profit_pct / 100)
+
                         results.append({
                             'date': df.iloc[i]['timestamp'],
                             'action': signal['action'],
@@ -169,9 +228,12 @@ class SimpleBacktest:
             winning_trades = df_results[df_results['win']]
             losing_trades = df_results[~df_results['win']]
 
-            # Calculate equity curve
+            # Calculate equity curve, anchored at initial capital before trade 1
             cumulative_profit = (1 + df_results['profit_pct'] / 100).cumprod()
-            equity_curve = initial_equity * cumulative_profit
+            equity_curve = pd.concat(
+                [pd.Series([initial_equity]), initial_equity * cumulative_profit],
+                ignore_index=True
+            )
 
             # Calculate maximum drawdown
             peak = equity_curve.expanding().max()

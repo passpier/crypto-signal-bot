@@ -483,7 +483,7 @@ class TelegramNotifier:
         confidence = self._calculate_confidence(total)
         sparkline = self._format_equity_sparkline(equity_curve)
 
-        lines = ["<b>回測績效 (近6個月)</b>"]
+        lines = ["<b>回測績效 (近60天)</b>"]
         lines.append(
             f"勝率 {win_rate:.1f}% ({wins}勝/{losses}負)  平均 {avg_profit:+.1f}%"
         )

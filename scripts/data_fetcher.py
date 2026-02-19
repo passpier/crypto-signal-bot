@@ -16,6 +16,23 @@ from scripts.utils import get_project_root, IS_CLOUD_RUN
 
 logger = logging.getLogger(__name__)
 
+_CANDLES_PER_DAY = {
+    '1m':  1440,
+    '3m':   480,
+    '5m':   288,
+    '15m':   96,
+    '30m':   48,
+    '1h':    24,
+    '2h':    12,
+    '4h':     6,
+    '6h':     4,
+    '8h':     3,
+    '12h':    2,
+    '1d':     1,
+    '3d':     0,   # <1/day; not usable with day-based logic
+    '1w':     0,
+}
+
 
 class CryptoDataFetcher:
     """Fetches cryptocurrency data from FreeCryptoAPI."""
@@ -137,21 +154,44 @@ class CryptoDataFetcher:
             logger.error(f"Failed to fetch current price: {e}")
             raise
     
+    def _candles_per_day(self, interval: str) -> int:
+        """Return number of candles produced per calendar day for a given interval."""
+        cpd = _CANDLES_PER_DAY.get(interval)
+        if not cpd:
+            raise ValueError(f"Unsupported or sub-daily interval: '{interval}'")
+        return cpd
+
     def fetch_historical_data(self, days: int = 30, interval: str = "1h") -> pd.DataFrame:
         """
-        Fetch historical K-line data from Binance.
-        
+        Fetch historical K-line (OHLCV) data from Binance.
+
         Args:
-            days: Number of days of historical data to fetch
-            interval: K-line interval (1h, 4h, 1d, etc.)
-            
+            days:     Requested number of calendar days of history.
+                      The actual number returned may be less if the request
+                      exceeds Binance's 1000-candle-per-request limit.
+            interval: Binance K-line interval string ('1m', '5m', '15m',
+                      '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d').
+
         Returns:
-            DataFrame with OHLCV data
-            
+            DataFrame with columns [timestamp, open, high, low, close, volume].
+            Rows are sorted oldest → newest.
+
         Raises:
-            requests.RequestException: If API request fails
+            ValueError: If interval is unsupported.
+            requests.RequestException: If the Binance API request fails.
         """
-        limit = min(days * 24, 1000)  # Binance max limit is 1000
+        BINANCE_MAX_CANDLES = 1000
+        candles_per_day = self._candles_per_day(interval)
+        requested_candles = days * candles_per_day
+        limit = min(requested_candles, BINANCE_MAX_CANDLES)
+
+        actual_days = limit // candles_per_day
+        if actual_days < days:
+            logger.warning(
+                f"fetch_historical_data: requested {days}d but Binance caps at "
+                f"{BINANCE_MAX_CANDLES} candles — returning ~{actual_days}d "
+                f"({limit} candles @ {interval})"
+            )
         url = f"{self.base_url}/klines?symbol={self.symbol}&interval={interval}&limit={limit}"
         
         try:
