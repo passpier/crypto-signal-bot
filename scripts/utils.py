@@ -6,8 +6,9 @@ from typing import Optional
 import yaml
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from project root (works regardless of cwd)
+_project_root = Path(__file__).resolve().parent.parent
+load_dotenv(_project_root / ".env")
 
 # Detect if running in Google Cloud Run
 IS_CLOUD_RUN = os.getenv('K_SERVICE') is not None

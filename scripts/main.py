@@ -17,11 +17,17 @@ from scripts.sentiment_analyzer import SentimentAnalyzer
 from scripts.utils import get_project_root, validate_config, load_config
 from scripts.coinglass_fetcher import CoinglassFetcher
 from scripts.crypto_news_fetcher import CryptoNewsFetcher
+from scripts.trade_journal import TradeJournal
 
 import argparse
 
 # Detect if running in Google Cloud Run
 IS_CLOUD_RUN = os.getenv('K_SERVICE') is not None
+
+JOURNAL_DB_PATH = (
+    Path('/tmp') / 'trade_journal.db' if IS_CLOUD_RUN
+    else get_project_root() / 'data' / 'trade_journal.db'
+)
 
 # Setup logging - adapt for Cloud Run
 if IS_CLOUD_RUN:
@@ -51,7 +57,8 @@ logger = logging.getLogger(__name__)
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Crypto Signal Bot')
     parser.add_argument('--dry-run', action='store_true', help='Run without sending Telegram notifications')
-    return parser.parse_args()
+    args, _ = parser.parse_known_args()
+    return args
 
 def main():
     """
@@ -124,6 +131,29 @@ def main():
         except Exception as e:
             logger.warning(f"⚠ Backtest failed: {e}")
             backtest_stats = None
+
+        # ============================================
+        # Step 3.5: Trade Journal — resolve open trades + compute live stats
+        # ============================================
+        logger.info("[3.5/9] Resolving open trades and computing live stats...")
+        journal = None
+        journal_stats = None
+        try:
+            journal = TradeJournal(
+                db_path=str(JOURNAL_DB_PATH),
+                gcs_bucket=os.getenv('GCS_BUCKET_NAME')
+            )
+            journal.resolve_open_trades(fetcher)
+            journal_stats = journal.compute_live_stats(days=30)
+            if journal_stats:
+                logger.info(
+                    f"✓ Journal: {journal_stats['win_rate']:.1f}% live win rate "
+                    f"({journal_stats['total_trades']} trades)"
+                )
+            else:
+                logger.info("✓ Journal: no closed trades yet")
+        except Exception as e:
+            logger.warning(f"⚠ Trade journal failed: {e}")
 
         # Generate technical signal and strength (quant scoring model)
         tech_signal = generator.calculate_signal_strength(df, backtest_stats=backtest_stats)
@@ -232,6 +262,7 @@ def main():
         # Build Telegram context (sentiment section)
         # This is now simplified since tech_signal already has all indicators
         telegram_context['backtest_stats'] = backtest_stats
+        telegram_context['journal_stats'] = journal_stats
         
         should_notify = not args.dry_run
         
@@ -247,7 +278,23 @@ def main():
                 logger.error(f"✗ Failed to send Telegram notification: {e}")
         else:
             logger.info("✓ Holding - no notification sent")
-        
+
+        # ============================================
+        # Step 8.5: Record signal to journal & close
+        # ============================================
+        if journal is not None:
+            try:
+                if tech_signal.get('action') in ('BUY', 'SELL') and should_notify:
+                    journal.record_signal(
+                        tech_signal,
+                        config['trading']['symbol'],
+                        config['trading'].get('interval', '1h')
+                    )
+                journal.close()
+                logger.info("✓ Trade journal saved")
+            except Exception as e:
+                logger.warning(f"⚠ Trade journal save failed: {e}")
+
         # ============================================
         # Output Summary
         # ============================================

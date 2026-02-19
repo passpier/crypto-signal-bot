@@ -27,3 +27,18 @@ gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
   --role "roles/run.invoker" --quiet
 
 echo "✓ Deploy done: $SERVICE_URL"
+
+# ── GCS bucket for trade journal persistence ──────────────────────────────────
+JOURNAL_BUCKET="${PROJECT_ID}-trade-journal"
+if ! gsutil ls "gs://${JOURNAL_BUCKET}" &>/dev/null; then
+  gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://${JOURNAL_BUCKET}/"
+  echo "✓ Created GCS bucket: gs://${JOURNAL_BUCKET}"
+else
+  echo "✓ GCS bucket already exists: gs://${JOURNAL_BUCKET}"
+fi
+gsutil iam ch "serviceAccount:${SERVICE_ACCOUNT}:roles/storage.objectAdmin" \
+  "gs://${JOURNAL_BUCKET}/"
+
+gcloud run services update "$SERVICE_NAME" --region "$REGION" \
+  --update-env-vars "GCS_BUCKET_NAME=${JOURNAL_BUCKET}"
+echo "✓ GCS_BUCKET_NAME set to ${JOURNAL_BUCKET}"

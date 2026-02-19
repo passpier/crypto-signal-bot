@@ -142,8 +142,12 @@ class TelegramNotifier:
         """Zone 5: Market context — Fear & Greed, Institutional, News."""
         return self._format_market_context(sentiment)
 
+    def _build_zone6_journal(self, journal_stats: Optional[Dict]) -> str:
+        """Zone 6: Live journal — always shown (placeholder if no data yet)."""
+        return self._format_journal_section(journal_stats)
+
     def _build_zone6_backtest(self, backtest_stats: Optional[Dict]) -> str:
-        """Zone 6: Backtest performance (only if available)."""
+        """Zone 7: Backtest performance (only if available)."""
         if not backtest_stats or 'error' in backtest_stats:
             return ""
         return self._format_backtest_section(backtest_stats)
@@ -174,6 +178,7 @@ class TelegramNotifier:
             trade_plan = signal.get('trade_plan')
             tech_summary = sentiment.get('technical_summary', {}) if sentiment else {}
             backtest_stats = sentiment.get('backtest_stats') if sentiment else None
+            journal_stats = sentiment.get('journal_stats') if sentiment else None
             ai_advice_text = sentiment.get('ai_advice_text') if sentiment else None
 
             # Build each zone
@@ -200,17 +205,23 @@ class TelegramNotifier:
                 message += zone5
                 message += sep
 
-            zone6 = self._build_zone6_backtest(backtest_stats)
-            if zone6:
-                message += zone6
+            # Zone 6: Live journal (always shown — placeholder if no data yet)
+            zone6_journal = self._build_zone6_journal(journal_stats)
+            message += zone6_journal
+            message += sep
+
+            # Zone 7: Simulation backtest (skip if unavailable)
+            zone7_backtest = self._build_zone6_backtest(backtest_stats)
+            if zone7_backtest:
+                message += zone7_backtest
                 message += sep
 
-            zone7 = self._build_zone7_ai(ai_advice_text)
-            if zone7:
-                # Enforce 4096-char Telegram limit with buffer for rest of message
+            # Zone 8: AI analysis (length-limited)
+            zone8_ai = self._build_zone7_ai(ai_advice_text)
+            if zone8_ai:
                 remaining = 4096 - len(message) - 50
                 if remaining > 100:
-                    message += zone7[:remaining]
+                    message += zone8_ai[:remaining]
 
             # Single TradingView button
             keyboard = [[
@@ -480,6 +491,41 @@ class TelegramNotifier:
             f"最佳 {best:+.1f}%  最差 {worst:+.1f}%  最大回撤 {max_dd:.1f}%  總報酬 {total_return:+.1f}%"
         )
         lines.append(f"信心 {confidence} ({total}筆)")
+        if sparkline != "—":
+            lines.append(f"權益曲線: {sparkline}")
+
+        return "\n".join(lines) + "\n"
+
+    def _format_journal_section(self, journal_stats: Optional[Dict]) -> str:
+        """Format live trade journal performance section."""
+        lines = ["<b>實際訊號績效 (近30天)</b>"]
+        if not journal_stats:
+            lines.append("尚無實際交易記錄")
+            return "\n".join(lines) + "\n"
+
+        wins = journal_stats.get('wins', 0)
+        losses = journal_stats.get('losses', 0)
+        total = wins + losses
+        win_rate = journal_stats.get('win_rate', 0)
+        avg_profit = journal_stats.get('avg_profit', 0)
+        best = journal_stats.get('best_trade', 0)
+        worst = journal_stats.get('worst_trade', 0)
+        max_dd = journal_stats.get('max_drawdown', 0)
+        total_return = journal_stats.get('total_return', 0)
+        equity_curve = journal_stats.get('equity_curve', [])
+        expired_count = journal_stats.get('expired_count', 0)
+
+        confidence = self._calculate_confidence(total)
+        sparkline = self._format_equity_sparkline(equity_curve)
+
+        lines.append(
+            f"勝率 {win_rate:.1f}% ({wins}勝/{losses}負)  平均 {avg_profit:+.1f}%"
+        )
+        lines.append(
+            f"最佳 {best:+.1f}%  最差 {worst:+.1f}%  最大回撤 {max_dd:.1f}%  總報酬 {total_return:+.1f}%"
+        )
+        expired_text = f"  逾期 {expired_count}筆" if expired_count else ""
+        lines.append(f"信心 {confidence} ({total}筆){expired_text}")
         if sparkline != "—":
             lines.append(f"權益曲線: {sparkline}")
 

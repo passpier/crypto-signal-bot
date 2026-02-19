@@ -12,11 +12,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Use google-generativeai directly (simpler, fewer conflicts)
 try:
-    import google.generativeai as genai
+    from google import genai
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
-    logging.warning("google-generativeai not available")
+    logging.warning("google-genai not available")
 
 from scripts.utils import load_config
 
@@ -37,23 +37,35 @@ class SentimentAnalyzer:
         
         # Initialize Gemini model (using google-generativeai directly)
         self.model = None
+        self.client = None
+        self.model_name = None
+        self.generation_config = None
         if GENAI_AVAILABLE:
             try:
-                gemini_key = self.config['api_keys'].get('gemini_api_key', '')
-                if gemini_key and gemini_key != "YOUR_GEMINI_API_KEY":
-                    genai.configure(api_key=gemini_key)
-                    self.model = genai.GenerativeModel(
-                        model_name="gemini-2.5-flash-lite",
-                        generation_config={
-                            "temperature": 0.3,
-                            "max_output_tokens": 5000,
-                            "top_p": 0.95,
-                            "top_k": 40
-                        }
+                gemini_key = (self.config.get('api_keys') or {}).get('gemini_api_key', '') or ''
+                gemini_key = (gemini_key or '').strip()
+                if not gemini_key or gemini_key == "YOUR_GEMINI_API_KEY":
+                    logger.info(
+                        "GEMINI_API_KEY not set or still placeholder (len=%s); AI sentiment will use template.",
+                        len(gemini_key) if gemini_key else 0,
                     )
-                    logger.info("Sentiment analyzer initialized with Gemini 2.5 Flash Lite")
+                else:
+                    self.client = genai.Client(api_key=gemini_key)
+                    # Prefer 2.5 Flash Lite; fallback to 2.0 Flash if needed
+                    self.model_name = "gemini-2.5-flash-lite"
+                    self.generation_config = genai.types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=5000,
+                        top_p=0.95,
+                        top_k=40,
+                    )
+                    logger.info(
+                        "Sentiment analyzer initialized with Gemini (model=%s, key length=%d)",
+                        self.model_name,
+                        len(gemini_key),
+                    )
             except Exception as e:
-                logger.warning(f"Failed to initialize Gemini: {e}")
+                logger.warning("Failed to initialize Gemini: %s", e, exc_info=True)
     
     def fetch_fear_greed_index(self) -> Dict:
         """
@@ -252,8 +264,25 @@ insufficient or conviction is low, recommend HOLD instead of forcing a trade.
 理由: 技術面／情緒面／機構面／新聞面各1點，並總結，200字內
             """
             logger.info(f"Prompt message: {prompt}")
-            # Use google-generativeai directly
-            response = self.model.generate_content(prompt)
+            if self.client is None:
+                logger.warning("Gemini client not initialized (missing or invalid API key); using template sentiment")
+                return self._generate_template_sentiment(fear_greed, df_with_indicators)
+            # Use google-genai; retry with fallback model if primary is unavailable
+            model_to_try = self.model_name
+            for attempt in range(2):
+                try:
+                    response = self.client.models.generate_content(
+                        model=model_to_try,
+                        contents=prompt,
+                        config=self.generation_config,
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 0 and model_to_try == "gemini-2.5-flash-lite":
+                        model_to_try = "gemini-2.0-flash"
+                        logger.info("Retrying with fallback model: %s (error: %s)", model_to_try, e)
+                    else:
+                        raise
 
             if hasattr(response, 'usage_metadata'):
                 logger.info(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")

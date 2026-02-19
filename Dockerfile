@@ -24,5 +24,5 @@ ENV TZ=Asia/Taipei
 
 # Default command: Run Flask app with gunicorn
 # Port is set by Cloud Run via $PORT environment variable
-CMD exec gunicorn --bind :${PORT:-8080} --workers 1 --threads 2 --timeout 600 app:app
+CMD ["sh", "-c", "exec gunicorn --bind :${PORT:-8080} --workers 1 --threads 2 --timeout 600 app:app"]
 
