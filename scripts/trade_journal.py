@@ -218,7 +218,7 @@ class TradeJournal:
         exit_reason = None
         resolved_at = None
 
-        expiry_candles = 24  # ~1 trading day on 1h interval
+        expiry_candles = 24
         elapsed = 0
 
         for _, row in candles_after.iterrows():

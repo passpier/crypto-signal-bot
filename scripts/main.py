@@ -122,7 +122,7 @@ def main():
         try:
             from scripts.backtest import SimpleBacktest
             backtest = SimpleBacktest()
-            backtest_stats = backtest.run_backtest(days=30)
+            backtest_stats = backtest.run_backtest(days=60)
             if 'error' not in backtest_stats:
                 logger.info(f"✓ Backtest: {backtest_stats.get('win_rate', 0):.1f}% win rate ({backtest_stats.get('total_trades', 0)} trades)")
             else:
@@ -234,25 +234,27 @@ def main():
         # ============================================
         logger.info("[7/8] Analyzing sentiment with Gemini AI...")
         sentiment = None
-        try:
-            if fear_greed and len(news) > 0:
-                current_price_value = float(current_price['price'])
-                sentiment = analyzer.analyze_sentiment_with_ai(
-                    fear_greed=fear_greed,
-                    news=news,
-                    df_with_indicators=df,
-                    current_price=current_price_value,
-                    institutional_data=institutional_data,
-                    tech_signal=tech_signal
-                )
-                if sentiment and 'ai_advice_text' in sentiment:
-                    telegram_context['ai_advice_text'] = sentiment['ai_advice_text']
-                logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
-            else:
-                logger.warning("⚠ Skipping AI analysis - Fear & Greed data unavailable or news data unavailable")
-        except Exception as e:
-            logger.warning(f"⚠ AI sentiment analysis failed: {e}")
-            logger.warning("  Continuing with technical analysis only...")
+
+        # TODO: Uncomment this when Gemini API is available
+        # try:
+        #     if fear_greed and len(news) > 0:
+        #         current_price_value = float(current_price['price'])
+        #         sentiment = analyzer.analyze_sentiment_with_ai(
+        #             fear_greed=fear_greed,
+        #             news=news,
+        #             df_with_indicators=df,
+        #             current_price=current_price_value,
+        #             institutional_data=institutional_data,
+        #             tech_signal=tech_signal
+        #         )
+        #         if sentiment and 'ai_advice_text' in sentiment:
+        #             telegram_context['ai_advice_text'] = sentiment['ai_advice_text']
+        #         logger.info(f"✓ AI sentiment analysis completed | Fear&Greed: {sentiment.get('fear_greed_value', 'N/A')}")
+        #     else:
+        #         logger.warning("⚠ Skipping AI analysis - Fear & Greed data unavailable or news data unavailable")
+        # except Exception as e:
+        #     logger.warning(f"⚠ AI sentiment analysis failed: {e}")
+        #     logger.warning("  Continuing with technical analysis only...")
         
         # ============================================
         # Step 8: Send Telegram Notification
