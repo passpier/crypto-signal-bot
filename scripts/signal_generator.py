@@ -127,13 +127,14 @@ class SignalGenerator:
                              np.where(df['price_change'] < 0, -df['volume'], 0))).cumsum()
 
         # Volume moving average (20)
-        df['volume_ma_20'] = df['volume'].rolling(window=20, min_periods=1).mean()
+        sr_window = self.config['indicators'].get('sr_window', 20)
+        df['volume_ma_20'] = df['volume'].rolling(window=sr_window, min_periods=1).mean()
 
-        # Support level (rolling 20-period low, shift(1) avoids look-ahead bias)
-        df['support'] = df['low'].shift(1).rolling(window=20, min_periods=1).min()
+        # Support level (rolling sr_window-period low, shift(1) avoids look-ahead bias)
+        df['support'] = df['low'].shift(1).rolling(window=sr_window, min_periods=1).min()
 
-        # Resistance level (rolling 20-period high, shift(1) avoids look-ahead bias)
-        df['resistance'] = df['high'].shift(1).rolling(window=20, min_periods=1).max()
+        # Resistance level (rolling sr_window-period high, shift(1) avoids look-ahead bias)
+        df['resistance'] = df['high'].shift(1).rolling(window=sr_window, min_periods=1).max()
 
         # Volume change percentage (7-day average)
         df['volume_change'] = 0.0
@@ -228,16 +229,28 @@ class SignalGenerator:
         # ============================================
         momentum_score = 0
         
-        if 30 < rsi < 40:
-            momentum_score += 50
-        elif 60 < rsi < 70:
-            momentum_score += 25
-        elif rsi <= 30:
-            momentum_score += 35
-        elif rsi >= 70:
-            momentum_score += 10
-        elif 40 <= rsi <= 60:
-            momentum_score += 40
+        bull_recovery   = self.config['indicators'].get('momentum_bull_rsi_recovery', 50)
+        bull_oversold   = self.config['indicators'].get('momentum_bull_rsi_oversold', 35)
+        bull_neutral    = self.config['indicators'].get('momentum_bull_rsi_neutral', 25)
+        bear_dist       = self.config['indicators'].get('momentum_bear_rsi_distribution', 50)
+        bear_overbought = self.config['indicators'].get('momentum_bear_rsi_overbought', 35)
+        bear_neutral    = self.config['indicators'].get('momentum_bear_rsi_neutral', 25)
+        if ema_12 > ema_26:  # provisional bull context
+            if 30 < rsi < 40:
+                momentum_score += bull_recovery
+            elif rsi <= 30:
+                momentum_score += bull_oversold
+            elif 40 <= rsi <= 60:
+                momentum_score += bull_neutral
+            # rsi >= 60 in bull context: 0 (overbought, no confirmation)
+        else:  # provisional bear context
+            if 60 < rsi < 70:
+                momentum_score += bear_dist
+            elif rsi >= 70:
+                momentum_score += bear_overbought
+            elif 40 <= rsi <= 60:
+                momentum_score += bear_neutral
+            # rsi <= 40 in bear context: 0 (oversold, no confirmation)
 
         if stoch_k > stoch_d and stoch_k < 80:
             momentum_score += 30
@@ -423,8 +436,8 @@ class SignalGenerator:
         min_volatility = 0.5
         
         # Panic Strategy: Relax requirements for high volatility opportunities
-        strength_threshold = 3 if is_panic else 4
-        direction_threshold = 2 if is_panic else 3
+        strength_threshold = self.config['trading'].get('strength_threshold_panic', 4) if is_panic else self.config['trading'].get('strength_threshold_normal', 4)
+        direction_threshold = self.config['trading'].get('direction_threshold_panic', 3) if is_panic else self.config['trading'].get('direction_threshold_normal', 3)
         
         if direction_score >= direction_threshold and strength >= strength_threshold and atr_percent >= min_volatility:
             action = 'BUY'
@@ -596,19 +609,20 @@ class SignalGenerator:
         # ============================================
         # 為什麼：趨勢市場給更大空間，盤整縮小風險
         
+        atr_cfg = self.config.get('atr_multipliers', {})
         if regime == 'trending_strong':
-            stop_atr_multiplier = 2.5    # 強趨勢給2.5ATR停損
-            target_atr_multipliers = [3, 5, 8]  # 目標更遠
+            stop_atr_multiplier = atr_cfg.get('stop_trending_strong', 2.5)
+            target_atr_multipliers = atr_cfg.get('target_trending_strong', [3, 5, 8])
         elif regime == 'trending_weak':
-            stop_atr_multiplier = 2.0
-            target_atr_multipliers = [2, 4, 6]
+            stop_atr_multiplier = atr_cfg.get('stop_trending_weak', 2.0)
+            target_atr_multipliers = atr_cfg.get('target_trending_weak', [2, 4, 6])
         else:  # ranging
-            stop_atr_multiplier = 1.5    # 盤整縮小停損
-            target_atr_multipliers = [1.5, 3, 4]  # 目標更近
-        
+            stop_atr_multiplier = atr_cfg.get('stop_ranging', 1.5)
+            target_atr_multipliers = atr_cfg.get('target_ranging', [1.5, 3, 4])
+
         # 高波動額外放寬
         if volatility == 'high':
-            stop_atr_multiplier *= 1.2
+            stop_atr_multiplier *= atr_cfg.get('stop_high_volatility_factor', 1.2)
         
         # ============================================
         # C. 做多計劃 (LONG)

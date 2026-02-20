@@ -131,6 +131,7 @@ class SimpleBacktest:
                 }
             
             results = []
+            backtest_max_bars = self.generator.config['trading'].get('backtest_max_bars', 72)
             equity_curve = []
             initial_equity = 10000  # Starting capital
             position_open = False   # True while a trade is active
@@ -138,7 +139,7 @@ class SimpleBacktest:
 
             # Simulate trading bar by bar
             # Start from index 50 to ensure indicators are calculated
-            for i in range(50, len(df) - 24):  # Leave 24 bars for future price check
+            for i in range(50, len(df) - backtest_max_bars):  # Leave backtest_max_bars bars for future price check
                 # Release position once we've moved past its exit bar
                 if position_open and i > exit_bar:
                     position_open = False
@@ -169,7 +170,7 @@ class SimpleBacktest:
                             continue
 
                         # Check future prices (next 24 hours)
-                        future_prices = df.iloc[i+1:i+25]['close']
+                        future_prices = df.iloc[i+1:i+1+backtest_max_bars]['close']
 
                         if len(future_prices) == 0:
                             continue
@@ -280,7 +281,7 @@ if __name__ == "__main__":
     
     try:
         backtest = SimpleBacktest()
-        results = backtest.run_backtest(days=30)
+        results = backtest.run_backtest(days=120)
         
         print("=== 回測結果 ===")
         print(f"總交易次數: {results['total_trades']}")
