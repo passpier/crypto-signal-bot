@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 class SignalGenerator:
     """Generates trading signals based on technical indicators and AI analysis."""
-    
+
+    # 0.5% band used to classify price as "near" a support/resistance level
+    PROXIMITY_BAND = 0.005
+
     def __init__(self, config_path: Optional[str] = None):
         """
         Initialize signal generator.
@@ -47,8 +50,8 @@ class SignalGenerator:
         # RSI calculation
         rsi_period = self.config['indicators'].get('rsi_period', 14)
         delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/rsi_period, min_periods=rsi_period, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/rsi_period, min_periods=rsi_period, adjust=False).mean()
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs))
         
@@ -98,14 +101,14 @@ class SignalGenerator:
             (low - close.shift(1)).abs()
         ], axis=1).max(axis=1)
 
-        atr = tr.rolling(window=adx_period, min_periods=adx_period).mean()
+        atr = tr.ewm(alpha=1/adx_period, min_periods=adx_period, adjust=False).mean()
         df['atr'] = atr  # Store ATR in DataFrame
         plus_dm_series = pd.Series(plus_dm, index=df.index)
         minus_dm_series = pd.Series(minus_dm, index=df.index)
-        plus_di = 100 * plus_dm_series.rolling(window=adx_period, min_periods=adx_period).mean() / atr
-        minus_di = 100 * minus_dm_series.rolling(window=adx_period, min_periods=adx_period).mean() / atr
+        plus_di = 100 * plus_dm_series.ewm(alpha=1/adx_period, min_periods=adx_period, adjust=False).mean() / atr
+        minus_di = 100 * minus_dm_series.ewm(alpha=1/adx_period, min_periods=adx_period, adjust=False).mean() / atr
         dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di)).replace([np.inf, -np.inf], np.nan)
-        df['adx'] = dx.rolling(window=adx_period, min_periods=adx_period).mean()
+        df['adx'] = dx.ewm(alpha=1/adx_period, min_periods=adx_period, adjust=False).mean()
         df['plus_di'] = plus_di
         df['minus_di'] = minus_di
 
@@ -126,17 +129,17 @@ class SignalGenerator:
         # Volume moving average (20)
         df['volume_ma_20'] = df['volume'].rolling(window=20, min_periods=1).mean()
 
-        # Support level (rolling 20-period low)
-        df['support'] = df['low'].rolling(window=20, min_periods=1).min()
+        # Support level (rolling 20-period low, shift(1) avoids look-ahead bias)
+        df['support'] = df['low'].shift(1).rolling(window=20, min_periods=1).min()
 
-        # Resistance level (rolling 20-period high)
-        df['resistance'] = df['high'].rolling(window=20, min_periods=1).max()
+        # Resistance level (rolling 20-period high, shift(1) avoids look-ahead bias)
+        df['resistance'] = df['high'].shift(1).rolling(window=20, min_periods=1).max()
 
         # Volume change percentage (7-day average)
         df['volume_change'] = 0.0
         if len(df) >= 7:
-            # Calculate rolling 7-day average volume
-            volume_avg_7d = df['volume'].rolling(window=7, min_periods=1).mean()
+            # Calculate rolling 7-day average volume (shift(1) excludes current candle)
+            volume_avg_7d = df['volume'].shift(1).rolling(window=7, min_periods=1).mean()
             # Calculate volume change percentage vs 7-day average
             df['volume_change'] = ((df['volume'] / volume_avg_7d) - 1) * 100
             # Replace inf/nan with 0 and clamp extreme values
@@ -304,14 +307,14 @@ class SignalGenerator:
         bouncing = price > float(prev.get('close', price) or price)
         
         if support > 0:
-            near_support = price <= support * 1.005
+            near_support = price <= support * (1 + self.PROXIMITY_BAND)
             if near_support and bouncing:
                 technical_score += 50
             elif near_support:
                 technical_score += 30
-        
+
         if resistance > 0:
-            near_resistance = price >= resistance * 0.995
+            near_resistance = price >= resistance * (1 - self.PROXIMITY_BAND)
             if near_resistance and not bouncing:
                 technical_score += 20
         
@@ -516,6 +519,42 @@ class SignalGenerator:
         }
 
 
+    def _calculate_kelly_fraction(self, strength, rr_ratio_T2, backtest_stats, win_rate_map):
+        """Calculate Half-Kelly fraction and estimated win rate for position sizing.
+
+        Args:
+            strength: Signal strength (1-5)
+            rr_ratio_T2: Risk-reward ratio at T2 target
+            backtest_stats: Optional dict with win_rate, avg_win, avg_loss from backtesting
+            win_rate_map: Fallback strength→win_rate lookup when backtest_stats is absent
+
+        Returns:
+            Tuple of (estimated_win_rate, kelly_fraction, kelly_source)
+        """
+        kelly_source = "強度估算 (無回測)"
+        if (backtest_stats
+                and backtest_stats.get('win_rate')
+                and backtest_stats.get('avg_win')
+                and backtest_stats.get('avg_loss')):
+            estimated_win_rate = backtest_stats['win_rate'] / 100
+            avg_win = backtest_stats['avg_win']
+            avg_loss = abs(backtest_stats['avg_loss'])
+            if avg_loss > 0:
+                b = avg_win / avg_loss
+                kelly_fraction = (estimated_win_rate * b - (1 - estimated_win_rate)) / b
+            else:
+                kelly_fraction = 0.10
+            kelly_source = f"回測勝率 {backtest_stats['win_rate']:.1f}%"
+        else:
+            estimated_win_rate = win_rate_map.get(strength, 0.50)
+            if rr_ratio_T2 > 0:
+                kelly_fraction = (estimated_win_rate * rr_ratio_T2 - (1 - estimated_win_rate)) / rr_ratio_T2
+            else:
+                kelly_fraction = 0
+        # LOW-RISK BTC: Half-Kelly with 15% hard cap
+        kelly_fraction = max(0, min(kelly_fraction * 0.5, 0.15))
+        return estimated_win_rate, kelly_fraction, kelly_source
+
     def _calculate_trade_plan(self, action, strength, price, atr, support, resistance,
                             bb_upper, bb_middle, bb_lower, rsi, adx, df, backtest_stats=None) -> Dict:
         """
@@ -590,7 +629,7 @@ class SignalGenerator:
             if bb_middle > 0 and price > bb_middle:
                 entries['conservative'] = round(bb_middle, 2)
             elif support > 0:
-                entries['conservative'] = round(support * 1.005, 2)  # 支撐上0.5%
+                entries['conservative'] = round(support * (1 + self.PROXIMITY_BAND), 2)  # 支撐上0.5%
             else:
                 entries['conservative'] = round(price * 0.985, 2)  # 回調1.5%
             
@@ -622,7 +661,7 @@ class SignalGenerator:
             
             # 如果有支撐，取較低者
             if support > 0:
-                support_stop = round(support * 0.995, 2)  # 支撐下0.5%
+                support_stop = round(support * (1 - self.PROXIMITY_BAND), 2)  # 支撐下0.5%
                 stops['hard_stop'] = max(stops['hard_stop'], support_stop)
             
             # 軟停損：給一點喘息空間
@@ -651,7 +690,7 @@ class SignalGenerator:
             
             # 如果有壓力位，調整T1
             if resistance > 0 and resistance < targets['T1']:
-                targets['T1'] = round(resistance * 0.995, 2)  # 壓力前止盈
+                targets['T1'] = round(resistance * (1 - self.PROXIMITY_BAND), 2)  # 壓力前止盈
             
             # 布林上軌作為參考
             if bb_upper > 0:
@@ -678,32 +717,10 @@ class SignalGenerator:
             # ----------------
             # 凱利公式簡化版：f = (勝率 × 報酬 - 敗率) / 報酬
 
-            # Use actual backtest data if available
-            kelly_source = "強度估算 (無回測)"
-            if backtest_stats and backtest_stats.get('win_rate') and backtest_stats.get('avg_win') and backtest_stats.get('avg_loss'):
-                actual_win_rate = backtest_stats['win_rate'] / 100
-                avg_win = backtest_stats['avg_win']
-                avg_loss = abs(backtest_stats['avg_loss'])
-
-                if avg_loss > 0:
-                    b = avg_win / avg_loss  # Reward/Risk ratio
-                    kelly_fraction = (actual_win_rate * b - (1 - actual_win_rate)) / b
-                else:
-                    kelly_fraction = 0.10  # Default if no losses
-
-                kelly_source = f"回測勝率 {backtest_stats['win_rate']:.1f}%"
-            else:
-                # Fallback to strength-based estimates
-                win_rate_map = {5: 0.65, 4: 0.58, 3: 0.52, 2: 0.48, 1: 0.42}
-                estimated_win_rate = win_rate_map.get(strength, 0.50)
-
-                if rr_ratios['T2'] > 0:
-                    kelly_fraction = (estimated_win_rate * rr_ratios['T2'] - (1 - estimated_win_rate)) / rr_ratios['T2']
-                else:
-                    kelly_fraction = 0
-
-            # LOW-RISK BTC: Half-Kelly with 15% hard cap
-            kelly_fraction = max(0, min(kelly_fraction * 0.5, 0.15))
+            buy_win_rate_map = {5: 0.65, 4: 0.58, 3: 0.52, 2: 0.48, 1: 0.42}
+            estimated_win_rate, kelly_fraction, kelly_source = self._calculate_kelly_fraction(
+                strength, rr_ratios['T2'], backtest_stats, buy_win_rate_map
+            )
 
             position_sizing = {
                 'kelly_fraction': round(kelly_fraction, 3),  # 凱利建議
@@ -787,7 +804,7 @@ class SignalGenerator:
             if bb_middle > 0 and price < bb_middle:
                 entries['conservative'] = round(bb_middle, 2)
             elif resistance > 0:
-                entries['conservative'] = round(resistance * 0.995, 2)
+                entries['conservative'] = round(resistance * (1 - self.PROXIMITY_BAND), 2)
             else:
                 entries['conservative'] = round(price * 1.015, 2)
             
@@ -810,7 +827,7 @@ class SignalGenerator:
             }
             
             if resistance > 0:
-                resistance_stop = round(resistance * 1.005, 2)
+                resistance_stop = round(resistance * (1 + self.PROXIMITY_BAND), 2)
                 stops['hard_stop'] = min(stops['hard_stop'], resistance_stop)
             
             stops['soft_stop'] = round(stops['hard_stop'] * 1.01, 2)
@@ -823,7 +840,7 @@ class SignalGenerator:
             }
             
             if support > 0 and support > targets['T1']:
-                targets['T1'] = round(support * 1.005, 2)
+                targets['T1'] = round(support * (1 + self.PROXIMITY_BAND), 2)
             
             if bb_lower > 0:
                 targets['moon'] = round(bb_lower, 2)
@@ -841,31 +858,10 @@ class SignalGenerator:
                 'T3': round(reward_T3 / risk, 2) if risk > 0 else 0,
             }
             
-            # Use actual backtest data if available (same as BUY)
-            kelly_source = "強度估算 (無回測)"
-            if backtest_stats and backtest_stats.get('win_rate') and backtest_stats.get('avg_win') and backtest_stats.get('avg_loss'):
-                actual_win_rate = backtest_stats['win_rate'] / 100
-                avg_win = backtest_stats['avg_win']
-                avg_loss = abs(backtest_stats['avg_loss'])
-
-                if avg_loss > 0:
-                    b = avg_win / avg_loss
-                    kelly_fraction = (actual_win_rate * b - (1 - actual_win_rate)) / b
-                else:
-                    kelly_fraction = 0.10
-
-                kelly_source = f"回測勝率 {backtest_stats['win_rate']:.1f}%"
-            else:
-                win_rate_map = {5: 0.60, 4: 0.55, 3: 0.50, 2: 0.45, 1: 0.40}
-                estimated_win_rate = win_rate_map.get(strength, 0.48)
-
-                if rr_ratios['T2'] > 0:
-                    kelly_fraction = (estimated_win_rate * rr_ratios['T2'] - (1 - estimated_win_rate)) / rr_ratios['T2']
-                else:
-                    kelly_fraction = 0
-
-            # LOW-RISK BTC: Half-Kelly with 15% hard cap
-            kelly_fraction = max(0, min(kelly_fraction * 0.5, 0.15))
+            sell_win_rate_map = {5: 0.60, 4: 0.55, 3: 0.50, 2: 0.45, 1: 0.40}
+            estimated_win_rate, kelly_fraction, kelly_source = self._calculate_kelly_fraction(
+                strength, rr_ratios['T2'], backtest_stats, sell_win_rate_map
+            )
 
             position_sizing = {
                 'kelly_fraction': round(kelly_fraction, 3),
