@@ -1,18 +1,10 @@
 """Data fetching module for cryptocurrency price data."""
 import requests
-import sqlite3
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 import pandas as pd
 import logging
 from time import sleep
 import sys
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from scripts.utils import get_project_root, IS_CLOUD_RUN
 
 logger = logging.getLogger(__name__)
 
@@ -33,78 +25,44 @@ _CANDLES_PER_DAY = {
     '1w':     0,
 }
 
+BINANCE_MAX_CANDLES = 1000
+
 
 class CryptoDataFetcher:
-    """Fetches cryptocurrency data from FreeCryptoAPI."""
-    
-    def __init__(self, db_path: Optional[str] = None, symbol: str = "BTCUSDT"):
+    """Fetches cryptocurrency data from Binance."""
+
+    def __init__(self, symbol: str = "BTCUSDT"):
         """
         Initialize the data fetcher.
-        
+
         Args:
-            db_path: Path to SQLite database. Defaults to data/btc_prices.db
             symbol: Trading pair symbol (e.g., BTCUSDT)
         """
-        if db_path is None:
-            # Cloud Run: Use /tmp (writable), Local: Use project data dir
-            if IS_CLOUD_RUN:
-                db_path = Path('/tmp') / 'btc_prices.db'
-            else:
-                db_path = get_project_root() / 'data' / 'btc_prices.db'
-        else:
-            db_path = Path(db_path)
-
-        # Ensure data directory exists (skip if Cloud Run /tmp)
-        try:
-            if not IS_CLOUD_RUN or str(db_path.parent) != '/tmp':
-                db_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            logger.warning(f"Could not create directory {db_path.parent}: {e}")
-        
-        self.db_path = str(db_path)
         self.symbol = symbol
-        # Use Binance public API as it's more reliable
         self.base_url = "https://api.binance.com/api/v3"
-        self.init_database()
-    
-    def init_database(self):
-        """Initialize the SQLite database with prices table."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS prices (
-                    timestamp INTEGER PRIMARY KEY,
-                    open REAL,
-                    high REAL,
-                    low REAL,
-                    close REAL,
-                    volume REAL
-                )
-            ''')
-            conn.commit()
-            conn.close()
-            logger.info(f"Database initialized at {self.db_path}")
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-            raise
-    
+
     def _make_request(self, url: str, max_retries: int = 3) -> Dict:
         """
         Make HTTP request with retry logic.
-        
+
         Args:
             url: API endpoint URL
             max_retries: Maximum number of retry attempts
-            
+
         Returns:
             JSON response data
-            
+
         Raises:
             requests.RequestException: If all retries fail
         """
         for attempt in range(max_retries):
             try:
                 response = requests.get(url, timeout=10)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    logger.warning(f"Rate limited by Binance. Waiting {retry_after}s...")
+                    sleep(retry_after)
+                    continue
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as e:
@@ -115,50 +73,52 @@ class CryptoDataFetcher:
                 else:
                     logger.error(f"Request failed after {max_retries} attempts: {e}")
                     raise
-    
+
     def fetch_current_price(self) -> Dict:
         """
         Fetch current price from Binance API.
-        
+
         Returns:
             Dictionary with price, change_24h, and volume
-            
+
         Raises:
             requests.RequestException: If API request fails
             KeyError: If API response structure is unexpected
         """
         # Binance 24hr ticker endpoint
         url = f"{self.base_url}/ticker/24hr?symbol={self.symbol}"
-        
+
         try:
             data = self._make_request(url)
-            
+
             # Binance API returns direct object (not nested in 'data')
             last_price = data.get('lastPrice')
             price_change = data.get('priceChangePercent', 0)
             volume = data.get('volume', 0)
-            
+
             if last_price is None:
                 raise ValueError(f"Could not extract price from API response: {data}")
-            
+
             result = {
                 'price': float(last_price),
                 'change_24h': float(price_change),
                 'volume': float(volume)
             }
-            
+
             logger.info(f"Fetched current price for {self.symbol}: ${result['price']:,.2f}")
             return result
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch current price: {e}")
             raise
-    
+
     def _candles_per_day(self, interval: str) -> int:
         """Return number of candles produced per calendar day for a given interval."""
         cpd = _CANDLES_PER_DAY.get(interval)
-        if not cpd:
-            raise ValueError(f"Unsupported or sub-daily interval: '{interval}'")
+        if cpd is None:
+            raise ValueError(f"Unknown interval: '{interval}'")
+        if cpd == 0:
+            raise ValueError(f"Unsupported sub-daily interval (< 1 candle/day): '{interval}'")
         return cpd
 
     def fetch_historical_data(self, days: int = 30, interval: str = "1h") -> pd.DataFrame:
@@ -180,7 +140,6 @@ class CryptoDataFetcher:
             ValueError: If interval is unsupported.
             requests.RequestException: If the Binance API request fails.
         """
-        BINANCE_MAX_CANDLES = 1000
         candles_per_day = self._candles_per_day(interval)
         requested_candles = days * candles_per_day
         limit = min(requested_candles, BINANCE_MAX_CANDLES)
@@ -193,69 +152,46 @@ class CryptoDataFetcher:
                 f"({limit} candles @ {interval})"
             )
         url = f"{self.base_url}/klines?symbol={self.symbol}&interval={interval}&limit={limit}"
-        
+
         try:
             klines = self._make_request(url)
-            
+
             if not isinstance(klines, list) or not klines:
                 raise ValueError("No historical data returned from API")
-            
+
             # Binance returns: [
-            #   [timestamp, open, high, low, close, volume, close_time, 
+            #   [timestamp, open, high, low, close, volume, close_time,
             #    quote_asset_volume, trades, taker_buy_base, taker_buy_quote, ignore]
             # ]
             # We only need the first 6 columns
             df = pd.DataFrame(klines)
             df = df.iloc[:, :6]  # Take only first 6 columns
             df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            
+
             # Convert timestamp from milliseconds to datetime
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', errors='coerce')
-            
+
             # Convert numeric columns
             numeric_cols = ['open', 'high', 'low', 'close', 'volume']
             for col in numeric_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-            
+
             # Remove rows with invalid data
             df = df.dropna()
-            
-            # Store in database
-            self._store_to_database(df)
-            
+
             logger.info(f"Fetched {len(df)} historical data points for {self.symbol}")
             return df
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch historical data: {e}")
             raise
-    
-    def _store_to_database(self, df: pd.DataFrame):
-        """Store DataFrame to SQLite database."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            
-            # Convert timestamp to integer (Unix timestamp in seconds)
-            df_db = df.copy()
-            df_db['timestamp'] = df_db['timestamp'].astype('int64') // 10**9
-            
-            # Use replace to update existing data
-            df_db.to_sql('prices', conn, if_exists='replace', index=False)
-            conn.commit()
-            conn.close()
-            
-            logger.debug(f"Stored {len(df_db)} records to database")
-        except Exception as e:
-            logger.warning(f"Failed to store data to database: {e}")
 
 
 # Test
 if __name__ == "__main__":
-    import sys
-    
     # Setup logging for standalone execution
     logging.basicConfig(level=logging.INFO)
-    
+
     try:
         fetcher = CryptoDataFetcher()
         current = fetcher.fetch_current_price()
@@ -264,4 +200,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-

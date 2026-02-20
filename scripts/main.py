@@ -96,13 +96,8 @@ def main():
         
         # Determine days based on interval to respect API limits (1000 candles max)
         interval = config['trading'].get('interval', '1h')
-        days_to_fetch = 30
-        if interval == '15m':
-            days_to_fetch = 5  # 5 * 96 = 480 candles
-        elif interval == '5m':
-            days_to_fetch = 2  # 2 * 288 = 576 candles
-            
-        df = fetcher.fetch_historical_data(days=days_to_fetch, interval=interval)
+        days = config['trading'].get('days', 30)
+        df = fetcher.fetch_historical_data(days=90, interval=interval)
         current_price = fetcher.fetch_current_price()
         logger.info(f"✓ Fetched {len(df)} data points | Current: ${current_price['price']:,.2f}")
         
@@ -122,7 +117,7 @@ def main():
         try:
             from scripts.backtest import SimpleBacktest
             backtest = SimpleBacktest()
-            backtest_stats = backtest.run_backtest(days=60)
+            backtest_stats = backtest.run_backtest(days=120)
             if 'error' not in backtest_stats:
                 logger.info(f"✓ Backtest: {backtest_stats.get('win_rate', 0):.1f}% win rate ({backtest_stats.get('total_trades', 0)} trades)")
             else:
@@ -135,7 +130,7 @@ def main():
         # ============================================
         # Step 3.5: Trade Journal — resolve open trades + compute live stats
         # ============================================
-        logger.info("[3.5/9] Resolving open trades and computing live stats...")
+        logger.info("[3.5/8] Resolving open trades and computing live stats...")
         journal = None
         journal_stats = None
         try:

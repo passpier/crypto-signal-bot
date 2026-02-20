@@ -25,9 +25,8 @@ class TestDataFetcher(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        self.test_db_path = str(project_root / 'data' / 'test_btc_prices.db')
-        self.fetcher = CryptoDataFetcher(db_path=self.test_db_path)
-    
+        self.fetcher = CryptoDataFetcher()
+
     def test_fetch_current_price(self):
         """Test fetching current BTC price."""
         try:
@@ -57,8 +56,7 @@ class TestSignalGenerator(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.generator = SignalGenerator()
-        self.test_db_path = str(project_root / 'data' / 'test_btc_prices.db')
-        self.fetcher = CryptoDataFetcher(db_path=self.test_db_path)
+        self.fetcher = CryptoDataFetcher()
     
     def test_calculate_indicators(self):
         """Test technical indicators calculation."""
@@ -81,8 +79,8 @@ class TestSignalGenerator(unittest.TestCase):
         # Check that indicators are calculated
         self.assertIn('rsi', df_with_indicators.columns)
         self.assertIn('macd', df_with_indicators.columns)
-        self.assertIn('ma_50', df_with_indicators.columns)
-        self.assertIn('ma_200', df_with_indicators.columns)
+        self.assertIn('ema_50', df_with_indicators.columns)
+        self.assertIn('ema_200', df_with_indicators.columns)
         
         # Check that RSI values are reasonable (0-100)
         if not df_with_indicators['rsi'].isna().all():

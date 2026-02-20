@@ -483,7 +483,7 @@ class TelegramNotifier:
         confidence = self._calculate_confidence(total)
         sparkline = self._format_equity_sparkline(equity_curve)
 
-        lines = ["<b>回測績效 (近60天)</b>"]
+        lines = ["<b>回測績效 (近120天)</b>"]
         lines.append(
             f"勝率 {win_rate:.1f}% ({wins}勝/{losses}負)  平均 {avg_profit:+.1f}%"
         )
@@ -507,7 +507,7 @@ class TelegramNotifier:
         losses = journal_stats.get('losses', 0)
         total = wins + losses
         win_rate = journal_stats.get('win_rate', 0)
-        avg_profit = journal_stats.get('avg_profit', 0)
+        avg_profit = journal_stats.get('avg_return', 0)
         best = journal_stats.get('best_trade', 0)
         worst = journal_stats.get('worst_trade', 0)
         max_dd = journal_stats.get('max_drawdown', 0)
