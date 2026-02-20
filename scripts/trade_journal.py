@@ -204,7 +204,7 @@ class TradeJournal:
         - Same candle: use relative distance from entry (closer = hit first)
         - After 24 elapsed candles (1 day on 1h): EXPIRED
         """
-        created_at = datetime.fromisoformat(trade['created_at'])
+        created_at = datetime.fromisoformat(trade['created_at']).replace(tzinfo=None)
         # Filter candles strictly after signal creation
         candles_after = df[df['timestamp'] > created_at].copy()
 
@@ -305,7 +305,7 @@ class TradeJournal:
             """
             SELECT status, profit_pct
             FROM journal_trades
-            WHERE resolved_at >= ? AND status IN ('WIN', 'LOSS', 'EXPIRED')
+            WHERE resolved_at >= ? AND status IN ('WIN', 'LOSS')
             ORDER BY resolved_at ASC
             """,
             (cutoff,),
@@ -314,7 +314,11 @@ class TradeJournal:
 
         wins = [r['profit_pct'] for r in rows if r['status'] == 'WIN']
         losses = [r['profit_pct'] for r in rows if r['status'] == 'LOSS']
-        expired_count = sum(1 for r in rows if r['status'] == 'EXPIRED')
+        expired_cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM journal_trades WHERE resolved_at >= ? AND status = 'EXPIRED'",
+            (cutoff,),
+        )
+        expired_count = expired_cursor.fetchone()[0]
 
         total = len(wins) + len(losses)
         if total == 0:
@@ -322,7 +326,7 @@ class TradeJournal:
 
         all_decisive = wins + losses
         win_rate = len(wins) / total * 100 if total else 0.0
-        avg_profit = sum(all_decisive) / len(all_decisive) if all_decisive else 0.0
+        avg_return = sum(all_decisive) / len(all_decisive) if all_decisive else 0.0
         avg_win = sum(wins) / len(wins) if wins else 0.0
         avg_loss = sum(losses) / len(losses) if losses else 0.0
         best_trade = max(all_decisive) if all_decisive else 0.0
@@ -338,7 +342,7 @@ class TradeJournal:
 
         # Max drawdown from equity curve
         max_drawdown = 0.0
-        peak = float('-inf')
+        peak = 0.0
         for val in equity_curve:
             if val > peak:
                 peak = val
@@ -352,7 +356,7 @@ class TradeJournal:
             'wins': len(wins),
             'losses': len(losses),
             'win_rate': win_rate,
-            'avg_profit': avg_profit,
+            'avg_return': avg_return,
             'avg_win': avg_win,
             'avg_loss': avg_loss,
             'max_drawdown': max_drawdown,
